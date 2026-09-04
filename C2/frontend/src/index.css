@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-zinc-950 text-zinc-200 antialiased;
+  }
+  
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #3f3f46 #18181b;
+  }
+  
+  *::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  *::-webkit-scrollbar-track {
+    background: #18181b;
+  }
+  
+  *::-webkit-scrollbar-thumb {
+    background-color: #3f3f46;
+    border-radius: 3px;
+  }
+}
+
+@layer utilities {
+  .glow-green {
+    box-shadow: 0 0 10px rgba(0, 255, 157, 0.5);
+  }
+  
+  .glow-blue {
+    box-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+  }
+}

@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jocky-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+      - CORS_ORIGIN=http://localhost:3000
+    networks:
+      - jocky-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jocky-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=/api
+    depends_on:
+      - backend
+    networks:
+      - jocky-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  jocky-network:
+    driver: bridge
