@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'lucide-react';
 import { telemetryAPI } from '../api/client';
+import { REFRESH_INTERVALS } from '../utils/constants';
 
 function TelemetryStream() {
   const [events, setEvents] = useState([]);
@@ -9,7 +10,7 @@ function TelemetryStream() {
 
   useEffect(() => {
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 5000);
+    const interval = setInterval(fetchTelemetry, REFRESH_INTERVALS.telemetry);
     return () => clearInterval(interval);
   }, []);
 

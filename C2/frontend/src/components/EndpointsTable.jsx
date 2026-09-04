@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { MonitorSmartphone, Cpu, Network, Clock, MoreVertical } from 'lucide-react';
 import { endpointsAPI } from '../api/client';
+import { REFRESH_INTERVALS } from '../utils/constants';
 import StatusIndicator from './StatusIndicator';
 
 function EndpointsTable({ detailed = false }) {
@@ -10,7 +11,7 @@ function EndpointsTable({ detailed = false }) {
 
   useEffect(() => {
     fetchEndpoints();
-    const interval = setInterval(fetchEndpoints, 30000);
+    const interval = setInterval(fetchEndpoints, REFRESH_INTERVALS.endpoints);
     return () => clearInterval(interval);
   }, []);
 
@@ -42,6 +43,14 @@ function EndpointsTable({ detailed = false }) {
             <div key={i} className="h-12 bg-zinc-800 rounded" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-zinc-900 rounded-lg p-6 border border-red-800">
+        <p className="text-red-400 text-sm">{error}</p>
       </div>
     );
   }

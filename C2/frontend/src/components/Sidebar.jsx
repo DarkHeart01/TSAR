@@ -5,8 +5,6 @@ import {
   Shield, 
   Settings, 
   Terminal,
-  Activity,
-  Server
 } from 'lucide-react';
 
 const navigationItems = [

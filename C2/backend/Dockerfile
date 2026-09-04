@@ -9,7 +9,7 @@ COPY . .
 RUN go build -o jocky-backend .
 
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates wget
 
 WORKDIR /app
 COPY --from=builder /app/jocky-backend .
