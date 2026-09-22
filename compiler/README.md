@@ -1,4 +1,4 @@
-## Command to run the JOCKY pipeline to get obfuscated .exe
+## JOCKY compiler
 
 pre-req:
 1. Python 3
@@ -6,7 +6,7 @@ pre-req:
 3. Windows SDK at 10.0.26100.0
 4. VS BuildTools 2022
 
-
+## Command to run the JOCKY pipeline to get obfuscated .exe
 1. Change to jocky directory
     `cd compiler\jocky\driver`
 2. Command
