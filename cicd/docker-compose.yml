@@ -1,0 +1,71 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: cicd-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - build_net
+
+  api-gateway:
+    build:
+      context: ./api
+    container_name: cicd-api-gateway
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ARTIFACT_DIR: /build_artifacts
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Read-only: the gateway only ever serves artifacts, it never writes them.
+      - build_artifacts:/build_artifacts:ro
+    networks:
+      - build_net
+
+  build-worker:
+    build:
+      context: ./worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ARTIFACT_DIR: /build_artifacts
+      WORKSPACE_DIR: /build_workspace
+      DEFAULT_BUILD_TIMEOUT: ${DEFAULT_BUILD_TIMEOUT:-120}
+      MAX_BUILD_TIMEOUT: ${MAX_BUILD_TIMEOUT:-600}
+    volumes:
+      - build_artifacts:/build_artifacts
+      - build_workspace:/build_workspace
+    networks:
+      - build_net
+    # Applies even without Swarm on Compose v2 ("docker compose up").
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+    # Scale horizontally with: docker compose up --scale build-worker=3
+
+volumes:
+  redis_data:
+  build_artifacts:
+  build_workspace:
+
+networks:
+  build_net:
+    driver: bridge
