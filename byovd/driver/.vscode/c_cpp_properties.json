@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "Win32-WDK",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/km",
+                "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/km/crt",
+                "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/shared",
+                "C:/Program Files (x86)/Windows Kits/10/Include/wdf/kmdf/1.15"
+            ],
+            "defines": [
+                "_KERNEL_MODE",
+                "_AMD64_",
+                "AMD64"
+            ],
+            "windowsSdkVersion": "10.0.28000.0",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "windows-msvc-x64"
+        }
+    ],
+    "version": 4
+}
