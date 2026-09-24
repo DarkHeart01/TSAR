@@ -4,6 +4,7 @@
             "name": "Win32-WDK",
             "includePath": [
                 "${workspaceFolder}/byovd/driver/**",
+                "${workspaceFolder}/byovd/user/**",
                 "${workspaceFolder}/byovd/shared/**",
                 "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/km",
                 "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/km/crt",
