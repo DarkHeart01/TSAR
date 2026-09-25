@@ -8,8 +8,18 @@ const char* i = "[*]";
 
 extern "C" NTSTATUS DirectSyscall(DWORD ssn, ...);
 
+DWORD ResolveSSN(LPCSTR functionName) {
+    DWORD ssn = GetSSN(functionName);           // Hell's Gate
+    if (ssn != -1) return ssn;
+
+    ssn = GetSSN_HalosGate(functionName);       // Halo's Gate
+    if (ssn != -1) return ssn;
+
+    return GetSSN_FreshCopy(functionName);      // Fresh copy from disk
+}
+
 int main() {
-    DWORD ssn = GetSSN("NtAllocateVirtualMemory");
+    DWORD ssn = ResolveSSN("NtAllocateVirtualMemory");
     if (ssn == -1) {
         printf("%s Failed to resolve SSN\n", e);
         return 1;
@@ -33,7 +43,7 @@ int main() {
     if (status == 0) {
         printf("%s Allocated memory at: %p\n", k, baseAddress);
     } else {
-        printf("%s Failed: 0x%X\n", e, status);
+        printf("[-] Failed: 0x%X\n", status);
     }
 
     return 0;
