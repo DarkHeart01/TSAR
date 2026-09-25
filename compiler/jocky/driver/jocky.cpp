@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 #define MAX_PATH_LEN 1024
 #define MAX_CMD_LEN  8192
+
 
 struct JockyArgs {
     char input_cpp[MAX_PATH_LEN];
@@ -19,6 +21,7 @@ struct JockyArgs {
     int  verbose;
 };
 
+
 static void get_exe_dir(char* out, int size) {
     GetModuleFileNameA(NULL, out, size);
     char* last = out;
@@ -27,9 +30,11 @@ static void get_exe_dir(char* out, int size) {
     *last = '\0';
 }
 
+
 static void resolve_path(const char* in, char* out, int size) {
     GetFullPathNameA(in, size, out, NULL);
 }
+
 
 static int run_cmd(const char* cmd, int verbose) {
     if (verbose) printf("[cmd] %s\n", cmd);
@@ -41,11 +46,13 @@ static int run_cmd(const char* cmd, int verbose) {
     return ret;
 }
 
+
 static int file_exists(const char* path) {
     FILE* f = fopen(path, "rb");
     if (f) { fclose(f); return 1; }
     return 0;
 }
+
 
 static void print_usage() {
     printf("\nJOCKY Compiler Framework\n========================\n\n");
@@ -62,9 +69,10 @@ static void print_usage() {
     printf("Note: On PowerShell quote passes: \"-passes=fla,sub,gvenc\"\n\n");
 }
 
+
 static int parse_args(int argc, char* argv[], JockyArgs* args) {
     memset(args, 0, sizeof(JockyArgs));
-    strcpy(args->passes, "fla,sub,gvenc");
+    strcpy(args->passes, "fla,sub,gvenc,api-hash");
     strcpy(args->entry, "main");
     args->use_poly = 1;
     args->use_spoof = 1;
@@ -92,10 +100,12 @@ static int parse_args(int argc, char* argv[], JockyArgs* args) {
     return 1;
 }
 
+
 int main(int argc, char* argv[]) {
     if (argc < 2 || !strcmp(argv[1],"--help") || !strcmp(argv[1],"-h")) {
         print_usage(); return 0;
     }
+
     JockyArgs args;
     if (!parse_args(argc, argv, &args)) { print_usage(); return 1; }
 
@@ -149,6 +159,7 @@ int main(int argc, char* argv[]) {
         printf("[+] Polaris clang: %s\n", polaris_clang);
     }
 
+
     // ── Derive temp file paths ─────────────────────────────────
     // All temp files go in the same dir as the input file
     char input_abs[MAX_PATH_LEN];
@@ -179,6 +190,7 @@ int main(int argc, char* argv[]) {
     char cmd[MAX_CMD_LEN];
     int ret;
 
+
     printf("\n");
     printf("╔══════════════════════════════════════════════╗\n");
     printf("║        JOCKY Compiler Framework              ║\n");
@@ -192,6 +204,7 @@ int main(int argc, char* argv[]) {
     if (args.use_nostdlib)
         printf("║  Entry:    %-35s║\n", args.entry);
     printf("╚══════════════════════════════════════════════╝\n\n");
+
 
     // ── Stage 3: Polymorphic transform ────────────────────────
     const char* compile_src = input_abs;
@@ -214,6 +227,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+
     // ── Stage 1A+2: Compile with Polaris passes ───────────────
     printf("[*] Stage 1A+2: Compiling [passes=%s]...\n",
            args.passes[0] ? args.passes : "none");
@@ -233,13 +247,16 @@ int main(int argc, char* argv[]) {
             polaris_clang, compile_src, obj_file);
     }
 
+
     if (ret >= MAX_CMD_LEN) {
         printf("[-] Command too long (%d chars). Paths too deep.\n", ret);
         goto fail;
     }
 
+
     if (run_cmd(cmd, args.verbose) != 0) goto fail;
     printf("[+] Object: %s\n\n", obj_file);
+
 
     // ── Stage 1B: Link ────────────────────────────────────────
     printf("[*] Stage 1B: Linking...\n");
@@ -253,16 +270,21 @@ int main(int argc, char* argv[]) {
             args.entry, raw_exe, obj_file,
             runtime_obj, kernel32_lib);
     } else {
+        const char* user32_lib =
+            "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\user32.lib";
+
         snprintf(cmd, sizeof(cmd),
             "clang -fuse-ld=lld "
             "-target x86_64-pc-windows-msvc "
-            "-o \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
+            "-o \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
             raw_exe, obj_file,
-            ucrt_lib, kernel32_lib, libcmt, libvcruntime);
+            ucrt_lib, kernel32_lib, libcmt, libvcruntime, user32_lib);
     }
+
 
     if (run_cmd(cmd, args.verbose) != 0) goto fail;
     printf("[+] Linked: %s\n\n", raw_exe);
+
 
     // ── Stage 6: PE Header Spoofing ───────────────────────────
     if (args.use_spoof) {
@@ -305,6 +327,7 @@ int main(int argc, char* argv[]) {
     } else {
         rename(raw_exe, args.output_exe);
     }
+
 
     // ── Cleanup ───────────────────────────────────────────────
     if (compile_src == poly_cpp) remove(poly_cpp);
