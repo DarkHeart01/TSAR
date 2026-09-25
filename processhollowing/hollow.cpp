@@ -304,7 +304,8 @@ int main() {
 
     if (!CreateProcessA(
         "C:\\Windows\\System32\\dllhost.exe",
-        NULL, NULL, NULL, FALSE,
+        (LPSTR)"/Processid:{00000000-0000-0000-0000-000000000000}",
+        NULL, NULL, FALSE,
         CREATE_SUSPENDED,
         NULL, NULL, &si, &pi
     )) {
