@@ -1,0 +1,28 @@
+# Build output
+build/
+cmake-build-*/
+
+# Generated compiler output
+output/
+output.ll
+output.bc
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+
+# Compiled files
+*.exe
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
