@@ -42,6 +42,12 @@ private:
     // Program structure
     // -----------------------------
 
+    std::vector<std::string>
+    parseAttributes();
+
+    std::unique_ptr<StructDeclaration>
+    parseStructDeclaration();
+
     std::unique_ptr<FunctionDeclaration>
     parseFunctionDeclaration();
 
@@ -63,16 +69,28 @@ private:
     parseStatement();
 
     std::unique_ptr<Statement>
-    parseVariableDeclaration();
+    parseVariableDeclaration(bool isVolatile = false);
 
     std::unique_ptr<Statement>
-    parseAssignment();
+    parseAssignment(const std::string& name);
+
+    std::unique_ptr<Statement>
+    parseArrayAssignment(const std::string& name);
 
     std::unique_ptr<Statement>
     parseIfStatement();
 
     std::unique_ptr<Statement>
     parseWhileStatement();
+
+    std::unique_ptr<Statement>
+    parseForStatement();
+
+    std::unique_ptr<Statement>
+    parseBreakStatement();
+
+    std::unique_ptr<Statement>
+    parseContinueStatement();
 
     std::unique_ptr<Statement>
     parseReturnStatement();
@@ -86,6 +104,15 @@ private:
 
     std::unique_ptr<Expression>
     parseExpression();
+
+    std::unique_ptr<Expression>
+    parseTernary();
+
+    std::unique_ptr<Expression>
+    parseLogical();
+
+    std::unique_ptr<Expression>
+    parseBitwise();
 
     std::unique_ptr<Expression>
     parseEquality();
@@ -109,4 +136,4 @@ private:
     parseFunctionCall(const std::string& name);
 };
 
-}
+} // namespace jocky

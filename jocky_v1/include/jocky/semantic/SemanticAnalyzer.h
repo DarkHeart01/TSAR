@@ -1,5 +1,9 @@
 #pragma once
 
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "jocky/ast/AST.h"
 #include "jocky/semantic/SymbolTable.h"
 #include "jocky/semantic/Types.h"
@@ -14,58 +18,51 @@ public:
 
 private:
     SymbolTable symbols;
-
     JockyType currentReturnType;
+    int loopDepth_;
+
+    // Struct name → total byte size
+    std::unordered_map<std::string, int> structSizes_;
 
     void registerBuiltins();
 
-    void registerFunctions(
-        Program& program
-    );
+    void registerFunctions(Program& program);
 
-    void analyzeFunction(
-        FunctionDeclaration& function
-    );
+    void registerStructs(Program& program);
 
-    void analyzeMain(
-        MainBlock& mainBlock
-    );
+    void registerGlobals(Program& program);
 
-    void analyzeBlock(
-        Block& block,
-        bool createScope = true
-    );
+    void analyzeFunction(FunctionDeclaration& function);
 
-    void analyzeStatement(
-        Statement& statement
-    );
+    void analyzeMain(MainBlock& mainBlock);
 
-    JockyType analyzeExpression(
-        Expression& expression
-    );
+    void analyzeBlock(Block& block, bool createScope = true);
 
-    void analyzeVariableDeclaration(
-        VariableDeclaration& statement
-    );
+    void analyzeStatement(Statement& statement);
 
-    void analyzeAssignment(
-        Assignment& statement
-    );
+    JockyType analyzeExpression(Expression& expression);
 
-    void analyzeIfStatement(
-        IfStatement& statement
-    );
+    void analyzeVariableDeclaration(VariableDeclaration& statement);
 
-    void analyzeWhileStatement(
-        WhileStatement& statement
-    );
+    void analyzeAssignment(Assignment& statement);
 
-    void analyzeReturnStatement(
-        ReturnStatement& statement
-    );
+    void analyzeArrayAssignment(ArrayAssignment& statement);
 
-    void analyzeExpressionStatement(
-        ExpressionStatement& statement
+    void analyzeIfStatement(IfStatement& statement);
+
+    void analyzeWhileStatement(WhileStatement& statement);
+
+    void analyzeForStatement(ForStatement& statement);
+
+    void analyzeReturnStatement(ReturnStatement& statement);
+
+    void analyzeExpressionStatement(ExpressionStatement& statement);
+
+    // Returns true if initType is implicitly convertible to declaredType
+    static bool typesCompatible(
+        JockyType declared,
+        JockyType init,
+        const std::string& declaredStr = ""
     );
 };
 

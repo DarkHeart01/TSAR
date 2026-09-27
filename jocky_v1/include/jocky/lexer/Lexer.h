@@ -22,14 +22,13 @@ private:
 
     char currentChar() const;
     char peekChar() const;
-
     bool isAtEnd() const;
 
-    void advance();
-
+    void skipLineComment();
+    void skipBlockComment();
     void skipWhitespace();
     void skipComment();
-
+    void advance();
     Token readNumber();
     Token readIdentifierOrKeyword();
     Token readString();

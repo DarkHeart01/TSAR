@@ -49,21 +49,32 @@ public:
 };
 
 
+class StructDeclaration : public ASTNode {
+public:
+    std::string name;
+    std::vector<Parameter> fields;
+
+    StructDeclaration(
+        std::string name,
+        std::vector<Parameter> fields
+    );
+};
+
+
 class FunctionDeclaration : public ASTNode {
 public:
     std::string name;
-
     std::vector<Parameter> parameters;
-
     std::string returnType;
-
     std::unique_ptr<Block> body;
+    std::vector<std::string> attributes;
 
     FunctionDeclaration(
         std::string name,
         std::vector<Parameter> parameters,
         std::string returnType,
-        std::unique_ptr<Block> body
+        std::unique_ptr<Block> body,
+        std::vector<std::string> attributes = {}
     );
 };
 
@@ -78,12 +89,13 @@ public:
 };
 
 
+class VariableDeclaration; // forward declaration for Program::globals
+
 class Program : public ASTNode {
 public:
-    std::vector<
-        std::unique_ptr<FunctionDeclaration>
-    > functions;
-
+    std::vector<std::unique_ptr<StructDeclaration>> structs;
+    std::vector<std::unique_ptr<VariableDeclaration>> globals;
+    std::vector<std::unique_ptr<FunctionDeclaration>> functions;
     std::unique_ptr<MainBlock> mainBlock;
 
     Program() = default;
@@ -96,15 +108,15 @@ public:
 class VariableDeclaration : public Statement {
 public:
     std::string name;
-
     std::string type;
-
-    std::unique_ptr<Expression> initializer;
+    std::unique_ptr<Expression> initializer; // nullable for array/struct decls
+    bool isVolatile;
 
     VariableDeclaration(
         std::string name,
         std::string type,
-        std::unique_ptr<Expression> initializer
+        std::unique_ptr<Expression> initializer,
+        bool isVolatile = false
     );
 };
 
@@ -112,7 +124,6 @@ public:
 class Assignment : public Statement {
 public:
     std::string name;
-
     std::unique_ptr<Expression> value;
 
     Assignment(
@@ -122,12 +133,24 @@ public:
 };
 
 
+class ArrayAssignment : public Statement {
+public:
+    std::string name;
+    std::unique_ptr<Expression> index;
+    std::unique_ptr<Expression> value;
+
+    ArrayAssignment(
+        std::string name,
+        std::unique_ptr<Expression> index,
+        std::unique_ptr<Expression> value
+    );
+};
+
+
 class IfStatement : public Statement {
 public:
     std::unique_ptr<Expression> condition;
-
     std::unique_ptr<Block> thenBlock;
-
     std::unique_ptr<Block> elseBlock;
 
     IfStatement(
@@ -141,7 +164,6 @@ public:
 class WhileStatement : public Statement {
 public:
     std::unique_ptr<Expression> condition;
-
     std::unique_ptr<Block> body;
 
     WhileStatement(
@@ -151,9 +173,43 @@ public:
 };
 
 
+class ForStatement : public Statement {
+public:
+    std::string initName;
+    std::string initType;
+    std::unique_ptr<Expression> initExpr;
+    std::unique_ptr<Expression> condition;
+    std::string incName;
+    std::unique_ptr<Expression> incExpr;
+    std::unique_ptr<Block> body;
+
+    ForStatement(
+        std::string initName,
+        std::string initType,
+        std::unique_ptr<Expression> initExpr,
+        std::unique_ptr<Expression> condition,
+        std::string incName,
+        std::unique_ptr<Expression> incExpr,
+        std::unique_ptr<Block> body
+    );
+};
+
+
+class BreakStatement : public Statement {
+public:
+    BreakStatement() = default;
+};
+
+
+class ContinueStatement : public Statement {
+public:
+    ContinueStatement() = default;
+};
+
+
 class ReturnStatement : public Statement {
 public:
-    std::unique_ptr<Expression> value;
+    std::unique_ptr<Expression> value; // nullable for void return
 
     explicit ReturnStatement(
         std::unique_ptr<Expression> value
@@ -176,9 +232,23 @@ public:
 
 class IntegerLiteral : public Expression {
 public:
-    int value;
+    long long value;
 
-    explicit IntegerLiteral(int value);
+    explicit IntegerLiteral(long long value);
+};
+
+
+class BoolLiteral : public Expression {
+public:
+    bool value;
+
+    explicit BoolLiteral(bool value);
+};
+
+
+class NullLiteral : public Expression {
+public:
+    NullLiteral() = default;
 };
 
 
@@ -200,10 +270,21 @@ public:
 };
 
 
+class ArrayIndexExpression : public Expression {
+public:
+    std::string name;
+    std::unique_ptr<Expression> index;
+
+    ArrayIndexExpression(
+        std::string name,
+        std::unique_ptr<Expression> index
+    );
+};
+
+
 class UnaryExpression : public Expression {
 public:
     std::string op;
-
     std::unique_ptr<Expression> operand;
 
     UnaryExpression(
@@ -216,9 +297,7 @@ public:
 class BinaryExpression : public Expression {
 public:
     std::unique_ptr<Expression> left;
-
     std::string op;
-
     std::unique_ptr<Expression> right;
 
     BinaryExpression(
@@ -229,20 +308,49 @@ public:
 };
 
 
-class FunctionCall : public Expression {
+class CastExpression : public Expression {
 public:
-    std::string functionName;
+    std::unique_ptr<Expression> expr;
+    std::string targetType;
 
-    std::vector<
-        std::unique_ptr<Expression>
-    > arguments;
-
-    FunctionCall(
-        std::string functionName,
-        std::vector<
-            std::unique_ptr<Expression>
-        > arguments
+    CastExpression(
+        std::unique_ptr<Expression> expr,
+        std::string targetType
     );
 };
 
-}
+
+class SizeofExpression : public Expression {
+public:
+    std::string typeName; // type or struct name
+
+    explicit SizeofExpression(std::string typeName);
+};
+
+
+class TernaryExpression : public Expression {
+public:
+    std::unique_ptr<Expression> condition;
+    std::unique_ptr<Expression> thenExpr;
+    std::unique_ptr<Expression> elseExpr;
+
+    TernaryExpression(
+        std::unique_ptr<Expression> condition,
+        std::unique_ptr<Expression> thenExpr,
+        std::unique_ptr<Expression> elseExpr
+    );
+};
+
+
+class FunctionCall : public Expression {
+public:
+    std::string functionName;
+    std::vector<std::unique_ptr<Expression>> arguments;
+
+    FunctionCall(
+        std::string functionName,
+        std::vector<std::unique_ptr<Expression>> arguments
+    );
+};
+
+} // namespace jocky

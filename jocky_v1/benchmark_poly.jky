@@ -1,0 +1,381 @@
+// benchmark.jky
+// Multi-threaded cryptographic benchmark
+// Demonstrates: threading, bitwise ops, memory, atomic counters
+// Equivalent to benchmark_app.cpp
+
+// Constants
+// MAX_ITEMS    = 1000
+// CRYPTO_ROUNDS = 64
+
+// Volatile global counter — shared across _jk_px4gn02r
+volatile let g_processed: int = 0
+
+// ─────────────────────────────────────────────────────────────────
+// Pseudo-random number generator
+// Returns next value in LCG sequence
+// ─────────────────────────────────────────────────────────────────
+fn custom_rand(_jk_wef7c1hs: ptr) -> int {
+    let _jk_cr7y0x79: int = 7784
+    let _jk_lwtffkgg: int = 6080
+    let _jk_txvbrnap: int = 1013
+    let _jk_xft714d5: int = 17567
+    let _jk_atj78hmb: int = _jk_txvbrnap | _jk_xft714d5
+    let _jk_bctg9vld: int = _jk_txvbrnap - _jk_cr7y0x79
+    if (_jk_bctg9vld & 0) == _jk_bctg9vld {
+        let _jk_heyscpyh: int = _jk_bctg9vld
+    }
+
+    let s: int = read_int(_jk_wef7c1hs, 0)
+    s = (s * 1103515245) + 12345
+    write_int(_jk_wef7c1hs, 0, s)
+    return s
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Cryptographic mixing function — heavy bitwise ops
+// Feistel-like structure — ideal for CFG flattening
+// @crypto applies: flatten + substitution + MBA + indcall
+// ─────────────────────────────────────────────────────────────────
+@crypto
+fn cryptographic_mix(input: ptr, len: int, state: ptr) -> void {
+    let _jk_0wn8pnrn: int = 4596
+    let _jk_fycukyq5: int = 13501
+    let _jk_9swqsr72: int = 2702
+    let _jk_hsq7wpvm: int = 16413
+    let _jk_sgbbsjq4: int = _jk_fycukyq5 & _jk_hsq7wpvm
+    let _jk_zujuw0l2: int = _jk_hsq7wpvm | _jk_fycukyq5
+    if (_jk_zujuw0l2 & 0) == _jk_zujuw0l2 {
+        let _jk_3rlt3l25: int = _jk_zujuw0l2
+    }
+
+    // Initialize state with standard MD4/MD5-like constants
+    let _jk_mqfjke1y: int = 0x67452301
+    let _jk_veky6pgv: int = 0xEFCDAB89
+    let _jk_1em801uv: int = 0x98BADCFE
+    let _jk_ecmlp7eg: int = 0x10325476
+
+    let i: int = 0
+    while i < len {
+        // Read one byte from input
+        let b: int = cast(read_byte(input, i), int) & 0xFF
+
+        let r: int = 0
+        while r < 64 {
+            // Feistel mixing rounds — dense bitwise ops
+            _jk_mqfjke1y = _jk_mqfjke1y + (((_jk_veky6pgv << 4) ^ (_jk_1em801uv >> 5)) + _jk_veky6pgv) ^ (b + r)
+            _jk_veky6pgv = _jk_veky6pgv ^ (((_jk_1em801uv << 3) ^ (_jk_ecmlp7eg >> 2)) + _jk_mqfjke1y)
+            _jk_1em801uv = _jk_1em801uv + (((_jk_ecmlp7eg << 6) ^ (_jk_mqfjke1y >> 3)) + _jk_veky6pgv) ^ b
+            _jk_ecmlp7eg = _jk_ecmlp7eg ^ (((_jk_mqfjke1y << 5) ^ (_jk_veky6pgv >> 4)) + _jk_1em801uv)
+
+            // Constant rotation
+            _jk_mqfjke1y = (_jk_mqfjke1y << 7) | (_jk_mqfjke1y >> 25)
+            _jk_1em801uv = (_jk_1em801uv << 11) | (_jk_1em801uv >> 21)
+
+            r = r + 1
+        }
+        i = i + 1
+    }
+
+    // Write final state back
+    write_int(state, 0,  _jk_mqfjke1y ^ read_int(state, 0))
+    write_int(state, 4,  _jk_veky6pgv ^ read_int(state, 4))
+    write_int(state, 8,  _jk_1em801uv ^ read_int(state, 8))
+    write_int(state, 12, _jk_ecmlp7eg ^ read_int(state, 12))
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Worker thread function
+// Each thread processes 1000 records, hashes them, sorts them
+// @obfuscate applies: flatten + substitution
+// ─────────────────────────────────────────────────────────────────
+@obfuscate
+fn worker_thread(param: ptr) -> int {
+    let _jk_tv2oirfz: int = 1352
+    let _jk_gagmw7he: int = 27840
+    let _jk_jdnuoe53: int = _jk_gagmw7he | _jk_tv2oirfz
+    if (_jk_jdnuoe53 & 0) == _jk_jdnuoe53 {
+        let _jk_4akdpz8m: int = _jk_jdnuoe53
+    }
+
+    // Record layout:
+    //   offset 0:   id        (int, 4 bytes)
+    //   offset 4:   text      (byte[256], 256 bytes)
+    //   offset 260: hash[0]   (int, 4 bytes)
+    //   offset 264: hash[1]   (int, 4 bytes)
+    //   offset 268: hash[2]   (int, 4 bytes)
+    //   offset 272: hash[3]   (int, 4 bytes)
+    // Total: 276 bytes per _jk_i8haoseh
+    let RECORD_SIZE: int = 276
+    let TEXT_OFFSET: int = 4
+    let HASH_OFFSET: int = 260
+
+    // Seed the RNG with current time + thread ID
+    let _jk_eg4j4m7q: int = get_tick() + get_tid()
+    let _jk_wef7c1hs: ptr = alloc(4)
+    write_int(_jk_wef7c1hs, 0, _jk_eg4j4m7q)
+
+    let _jk_8dsi67lh: ptr = param
+    let i: int = 0
+
+    // Process 1000 records
+    while i < 1000 {
+        let _jk_i8haoseh: ptr = _jk_8dsi67lh + (i * RECORD_SIZE)
+
+        // Set _jk_i8haoseh ID
+        write_int(_jk_i8haoseh, 0, i)
+
+        // Generate pseudo-random data into text field
+        let _jk_0gvsnuau: ptr = _jk_i8haoseh + TEXT_OFFSET
+        let _jk_qwibvfn4: int = custom_rand(_jk_wef7c1hs) & 0x270F  // % 10000
+        let _jk_bciqbr9j: int = custom_rand(_jk_wef7c1hs)
+
+        // Fill text with pattern based on random values
+        let t: int = 0
+        while t < 32 {
+            let b: int = (_jk_qwibvfn4 ^ _jk_bciqbr9j ^ t) & 0xFF
+            write_byte(_jk_0gvsnuau, t, cast(b, byte))
+            t = t + 1
+        }
+
+        // Hash the text field
+        let _jk_2ii62dyq: ptr = _jk_i8haoseh + HASH_OFFSET
+
+        // Initialize hash state
+        write_int(_jk_2ii62dyq, 0,  0x67452301)
+        write_int(_jk_2ii62dyq, 4,  0xEFCDAB89)
+        write_int(_jk_2ii62dyq, 8,  0x98BADCFE)
+        write_int(_jk_2ii62dyq, 12, 0x10325476)
+
+        cryptographic_mix(_jk_0gvsnuau, 32, _jk_2ii62dyq)
+
+        // Thread-safe increment of global counter
+        atomic_inc(cast(g_processed, ptr))
+
+        i = i + 1
+    }
+
+    // Bubble sort by hash[0] — creates deeply nested branches (good for flattening demo)
+    let _jk_mnnypd8a: int = 0
+    while _jk_mnnypd8a < 999 {
+        let _jk_qjjj4hbt: int = 0
+        while _jk_qjjj4hbt < (999 - _jk_mnnypd8a) {
+            let _jk_7i8osy9m: ptr = _jk_8dsi67lh + (_jk_qjjj4hbt * RECORD_SIZE)
+            let _jk_nsqgww6v: ptr = _jk_8dsi67lh + ((_jk_qjjj4hbt + 1) * RECORD_SIZE)
+
+            let _jk_mjyg3p0u: int = read_int(_jk_7i8osy9m + HASH_OFFSET, 0)
+            let _jk_054w34yj: int = read_int(_jk_nsqgww6v + HASH_OFFSET, 0)
+
+            if _jk_mjyg3p0u > _jk_054w34yj {
+                // Swap records
+                let _jk_s745oiak: ptr = alloc(RECORD_SIZE)
+                memcopy(_jk_s745oiak, _jk_7i8osy9m, RECORD_SIZE)
+                memcopy(_jk_7i8osy9m, _jk_nsqgww6v, RECORD_SIZE)
+                memcopy(_jk_nsqgww6v, _jk_s745oiak, RECORD_SIZE)
+                free_mem(_jk_s745oiak, RECORD_SIZE)
+            }
+
+            _jk_qjjj4hbt = _jk_qjjj4hbt + 1
+        }
+        _jk_mnnypd8a = _jk_mnnypd8a + 1
+    }
+
+    free_mem(_jk_wef7c1hs, 4)
+    return 0
+}
+
+// Matrix multiplication — adds real math ops
+fn mat_mul(a: ptr, b: ptr, c: ptr, n: int) -> void {
+    let _jk_szjhgw0f: int = 4728
+    let _jk_kb2zzrdy: int = 10336
+    let _jk_s6f918nm: int = 29287
+    let _jk_0o2hb12u: int = 28336
+    let _jk_k77pk2u8: int = _jk_szjhgw0f + _jk_kb2zzrdy
+    let _jk_jjcrf7m3: int = _jk_kb2zzrdy - _jk_s6f918nm
+    if (_jk_jjcrf7m3 & 0) == _jk_jjcrf7m3 {
+        let _jk_9wv4841e: int = _jk_jjcrf7m3
+    }
+
+    let i: int = 0
+    while i < n {
+        let j: int = 0
+        while j < n {
+            let _jk_419z1m1s: int = 0
+            let k: int = 0
+            while k < n {
+                let _jk_6te6c6zz: int = read_int(a, (i * n + k) * 4)
+                let _jk_8x6bi5nm: int = read_int(b, (k * n + j) * 4)
+                _jk_419z1m1s = _jk_419z1m1s + (_jk_6te6c6zz * _jk_8x6bi5nm)
+                k = k + 1
+            }
+            write_int(c, (i * n + j) * 4, _jk_419z1m1s)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// Fibonacci — adds branching complexity
+fn fibonacci(n: int) -> int {
+    let _jk_lv4us235: int = 31724
+    let _jk_tgz3r3se: int = 30022
+    let _jk_xikk91rs: int = 17238
+    let _jk_t0qcpi92: int = _jk_xikk91rs & _jk_lv4us235
+    if (_jk_t0qcpi92 & 0) == _jk_t0qcpi92 {
+        let _jk_gdquxkvv: int = _jk_t0qcpi92
+    }
+
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let a: int = 0
+    let b: int = 1
+    let i: int = 2
+    while i <= n {
+        let c: int = a + b
+        a = b
+        b = c
+        i = i + 1
+    }
+    return b
+}
+
+// Sieve of Eratosthenes — adds memory ops
+fn count_primes(limit: int) -> int {
+    let _jk_m8gj41zw: int = 32473
+    let _jk_so91fr5m: int = 18506
+    let _jk_kbhp28c1: int = _jk_m8gj41zw + _jk_so91fr5m
+    if (_jk_kbhp28c1 & 0) == _jk_kbhp28c1 {
+        let _jk_xr00ks87: int = _jk_kbhp28c1
+    }
+
+    let _jk_2jr4w3cr: ptr = alloc(limit * 4)
+    memzero(_jk_2jr4w3cr, limit * 4)
+    let i: int = 2
+    while i * i < limit {
+        if read_int(_jk_2jr4w3cr, i * 4) == 0 {
+            let j: int = i * i
+            while j < limit {
+                write_int(_jk_2jr4w3cr, j * 4, 1)
+                j = j + i
+            }
+        }
+        i = i + 1
+    }
+    let _jk_sixh02sw: int = 0
+    let k: int = 2
+    while k < limit {
+        if read_int(_jk_2jr4w3cr, k * 4) == 0 {
+            _jk_sixh02sw = _jk_sixh02sw + 1
+        }
+        k = k + 1
+    }
+    free_mem(_jk_2jr4w3cr, limit * 4)
+    return _jk_sixh02sw
+}
+
+// GCD — Euclidean algorithm
+fn gcd(a: int, b: int) -> int {
+    let _jk_d37s0hr6: int = 23754
+    let _jk_se35qs5b: int = 14779
+    let _jk_pzm7qo3r: int = 23237
+    let _jk_ry6oyfzs: int = _jk_pzm7qo3r & _jk_se35qs5b
+    if (_jk_ry6oyfzs & 0) == _jk_ry6oyfzs {
+        let _jk_5r8zjcx0: int = _jk_ry6oyfzs
+    }
+
+    while b != 0 {
+        let t: int = b
+        b = a - ((a / b) * b)
+        a = t
+    }
+    return a
+}
+
+// Collatz _jk_jtlj16ty
+fn collatz(n: int) -> int {
+    let _jk_meawsbp5: int = 9950
+    let _jk_wpaf56c8: int = 21733
+    let _jk_ctwcz3rg: int = 4605
+    let _jk_ue4xnx0y: int = 4296
+    let _jk_xwozxvsw: int = _jk_ue4xnx0y + _jk_wpaf56c8
+    let _jk_mvcscdib: int = _jk_ue4xnx0y | _jk_meawsbp5
+    if (_jk_mvcscdib & 0) == _jk_mvcscdib {
+        let _jk_fsz308p3: int = _jk_mvcscdib
+    }
+
+    let _jk_jtlj16ty: int = 0
+    while n != 1 {
+        if (n & 1) == 0 {
+            n = n / 2
+        } else {
+            n = n * 3 + 1
+        }
+        _jk_jtlj16ty = _jk_jtlj16ty + 1
+    }
+    return _jk_jtlj16ty
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Entry point
+// ─────────────────────────────────────────────────────────────────
+main {
+    let _jk_0g55htvm: int = 24096
+    let _jk_ur8c4o99: int = 26430
+    let _jk_ja3p6rp2: int = 23132
+    let _jk_qyulkyoo: int = _jk_ja3p6rp2 + _jk_ur8c4o99
+    if (_jk_qyulkyoo & 0) == _jk_qyulkyoo {
+        let _jk_9yhld89z: int = _jk_qyulkyoo
+    }
+
+    let RECORD_SIZE: int = 276
+    let NUM_RECORDS: int = 1000
+    let NUM_THREADS: int = 4
+    let _jk_zqdqlpko: int = fibonacci(35)
+    let _jk_zai4d5mw: int = count_primes(1000)
+    let _jk_sns77dbn: int = collatz(27)
+    let g: int = gcd(_jk_zqdqlpko, _jk_zai4d5mw)
+    // Allocate _jk_8dsi67lh — 1000 records × 276 bytes = 276000 bytes
+    let _jk_8dsi67lh: ptr = alloc(NUM_RECORDS * RECORD_SIZE)
+    if _jk_8dsi67lh == null {
+        exit(1)
+    }
+
+    // Zero the _jk_8dsi67lh
+    memzero(_jk_8dsi67lh, NUM_RECORDS * RECORD_SIZE)
+
+    // Spawn 4 worker _jk_px4gn02r — all sharing the same _jk_8dsi67lh
+    let _jk_px4gn02r: handle[4]
+    let i: int = 0
+    while i < NUM_THREADS {
+        _jk_px4gn02r[i] = create_thread(cast(worker_thread, fnptr), _jk_8dsi67lh)
+        if _jk_px4gn02r[i] == INVALID_HANDLE {
+            exit(2)
+        }
+        i = i + 1
+    }
+
+    // Wait for all 4 _jk_px4gn02r to finish
+    wait_all(cast(_jk_px4gn02r, ptr), NUM_THREADS, INFINITE)
+
+    // Close thread handles
+    i = 0
+    while i < NUM_THREADS {
+        close_handle(_jk_px4gn02r[i])
+        i = i + 1
+    }
+
+    // Clean up and exit with processed _jk_sixh02sw
+    let _jk_sixh02sw: int = g_processed
+    free_mem(_jk_8dsi67lh, NUM_RECORDS * RECORD_SIZE)
+    let _jk_w7wep3ny: ptr = alloc(16 * 4)
+    let _jk_hywy0qln: ptr = alloc(16 * 4)
+    let _jk_2kprew74: ptr = alloc(16 * 4)
+    memzero(_jk_w7wep3ny, 64)
+    memzero(_jk_hywy0qln, 64)
+    memzero(_jk_2kprew74, 64)
+    mat_mul(_jk_w7wep3ny, _jk_hywy0qln, _jk_2kprew74, 4)
+    free_mem(_jk_w7wep3ny, 64)
+    free_mem(_jk_hywy0qln, 64)
+    free_mem(_jk_2kprew74, 64)
+
+    exit(_jk_sixh02sw + g + _jk_sns77dbn)
+}

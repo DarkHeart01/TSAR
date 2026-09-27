@@ -4,6 +4,6 @@ fn add(a: int, b: int) -> int {
 }
 
 main {
-    let value: int = add(10, 20)
+    let value: int = add(40, 20)
     exit(value)
 }

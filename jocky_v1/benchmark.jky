@@ -1,0 +1,303 @@
+// benchmark.jky
+// Multi-threaded cryptographic benchmark
+// Demonstrates: threading, bitwise ops, memory, atomic counters
+// Equivalent to benchmark_app.cpp
+
+// Constants
+// MAX_ITEMS    = 1000
+// CRYPTO_ROUNDS = 64
+
+// Volatile global counter — shared across threads
+volatile let g_processed: int = 0
+
+// ─────────────────────────────────────────────────────────────────
+// Pseudo-random number generator
+// Returns next value in LCG sequence
+// ─────────────────────────────────────────────────────────────────
+fn custom_rand(seed: ptr) -> int {
+    let s: int = read_int(seed, 0)
+    s = (s * 1103515245) + 12345
+    write_int(seed, 0, s)
+    return s
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Cryptographic mixing function — heavy bitwise ops
+// Feistel-like structure — ideal for CFG flattening
+// @crypto applies: flatten + substitution + MBA + indcall
+// ─────────────────────────────────────────────────────────────────
+@crypto
+fn cryptographic_mix(input: ptr, len: int, state: ptr) -> void {
+    // Initialize state with standard MD4/MD5-like constants
+    let v0: int = 0x67452301
+    let v1: int = 0xEFCDAB89
+    let v2: int = 0x98BADCFE
+    let v3: int = 0x10325476
+
+    let i: int = 0
+    while i < len {
+        // Read one byte from input
+        let b: int = cast(read_byte(input, i), int) & 0xFF
+
+        let r: int = 0
+        while r < 64 {
+            // Feistel mixing rounds — dense bitwise ops
+            v0 = v0 + (((v1 << 4) ^ (v2 >> 5)) + v1) ^ (b + r)
+            v1 = v1 ^ (((v2 << 3) ^ (v3 >> 2)) + v0)
+            v2 = v2 + (((v3 << 6) ^ (v0 >> 3)) + v1) ^ b
+            v3 = v3 ^ (((v0 << 5) ^ (v1 >> 4)) + v2)
+
+            // Constant rotation
+            v0 = (v0 << 7) | (v0 >> 25)
+            v2 = (v2 << 11) | (v2 >> 21)
+
+            r = r + 1
+        }
+        i = i + 1
+    }
+
+    // Write final state back
+    write_int(state, 0,  v0 ^ read_int(state, 0))
+    write_int(state, 4,  v1 ^ read_int(state, 4))
+    write_int(state, 8,  v2 ^ read_int(state, 8))
+    write_int(state, 12, v3 ^ read_int(state, 12))
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Worker thread function
+// Each thread processes 1000 records, hashes them, sorts them
+// @obfuscate applies: flatten + substitution
+// ─────────────────────────────────────────────────────────────────
+@obfuscate
+fn worker_thread(param: ptr) -> int {
+    // Record layout:
+    //   offset 0:   id        (int, 4 bytes)
+    //   offset 4:   text      (byte[256], 256 bytes)
+    //   offset 260: hash[0]   (int, 4 bytes)
+    //   offset 264: hash[1]   (int, 4 bytes)
+    //   offset 268: hash[2]   (int, 4 bytes)
+    //   offset 272: hash[3]   (int, 4 bytes)
+    // Total: 276 bytes per record
+    let RECORD_SIZE: int = 276
+    let TEXT_OFFSET: int = 4
+    let HASH_OFFSET: int = 260
+
+    // Seed the RNG with current time + thread ID
+    let seed_val: int = get_tick() + get_tid()
+    let seed: ptr = alloc(4)
+    write_int(seed, 0, seed_val)
+
+    let dataset: ptr = param
+    let i: int = 0
+
+    // Process 1000 records
+    while i < 1000 {
+        let record: ptr = dataset + (i * RECORD_SIZE)
+
+        // Set record ID
+        write_int(record, 0, i)
+
+        // Generate pseudo-random data into text field
+        let text_ptr: ptr = record + TEXT_OFFSET
+        let rand1: int = custom_rand(seed) & 0x270F  // % 10000
+        let rand2: int = custom_rand(seed)
+
+        // Fill text with pattern based on random values
+        let t: int = 0
+        while t < 32 {
+            let b: int = (rand1 ^ rand2 ^ t) & 0xFF
+            write_byte(text_ptr, t, cast(b, byte))
+            t = t + 1
+        }
+
+        // Hash the text field
+        let hash_ptr: ptr = record + HASH_OFFSET
+
+        // Initialize hash state
+        write_int(hash_ptr, 0,  0x67452301)
+        write_int(hash_ptr, 4,  0xEFCDAB89)
+        write_int(hash_ptr, 8,  0x98BADCFE)
+        write_int(hash_ptr, 12, 0x10325476)
+
+        cryptographic_mix(text_ptr, 32, hash_ptr)
+
+        // Thread-safe increment of global counter
+        atomic_inc(cast(g_processed, ptr))
+
+        i = i + 1
+    }
+
+    // Bubble sort by hash[0] — creates deeply nested branches (good for flattening demo)
+    let outer: int = 0
+    while outer < 999 {
+        let inner: int = 0
+        while inner < (999 - outer) {
+            let rec_a: ptr = dataset + (inner * RECORD_SIZE)
+            let rec_b: ptr = dataset + ((inner + 1) * RECORD_SIZE)
+
+            let hash_a: int = read_int(rec_a + HASH_OFFSET, 0)
+            let hash_b: int = read_int(rec_b + HASH_OFFSET, 0)
+
+            if hash_a > hash_b {
+                // Swap records
+                let temp: ptr = alloc(RECORD_SIZE)
+                memcopy(temp, rec_a, RECORD_SIZE)
+                memcopy(rec_a, rec_b, RECORD_SIZE)
+                memcopy(rec_b, temp, RECORD_SIZE)
+                free_mem(temp, RECORD_SIZE)
+            }
+
+            inner = inner + 1
+        }
+        outer = outer + 1
+    }
+
+    free_mem(seed, 4)
+    return 0
+}
+
+// Matrix multiplication — adds real math ops
+fn mat_mul(a: ptr, b: ptr, c: ptr, n: int) -> void {
+    let i: int = 0
+    while i < n {
+        let j: int = 0
+        while j < n {
+            let sum: int = 0
+            let k: int = 0
+            while k < n {
+                let av: int = read_int(a, (i * n + k) * 4)
+                let bv: int = read_int(b, (k * n + j) * 4)
+                sum = sum + (av * bv)
+                k = k + 1
+            }
+            write_int(c, (i * n + j) * 4, sum)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+// Fibonacci — adds branching complexity
+fn fibonacci(n: int) -> int {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    let a: int = 0
+    let b: int = 1
+    let i: int = 2
+    while i <= n {
+        let c: int = a + b
+        a = b
+        b = c
+        i = i + 1
+    }
+    return b
+}
+
+// Sieve of Eratosthenes — adds memory ops
+fn count_primes(limit: int) -> int {
+    let sieve: ptr = alloc(limit * 4)
+    memzero(sieve, limit * 4)
+    let i: int = 2
+    while i * i < limit {
+        if read_int(sieve, i * 4) == 0 {
+            let j: int = i * i
+            while j < limit {
+                write_int(sieve, j * 4, 1)
+                j = j + i
+            }
+        }
+        i = i + 1
+    }
+    let count: int = 0
+    let k: int = 2
+    while k < limit {
+        if read_int(sieve, k * 4) == 0 {
+            count = count + 1
+        }
+        k = k + 1
+    }
+    free_mem(sieve, limit * 4)
+    return count
+}
+
+// GCD — Euclidean algorithm
+fn gcd(a: int, b: int) -> int {
+    while b != 0 {
+        let t: int = b
+        b = a - ((a / b) * b)
+        a = t
+    }
+    return a
+}
+
+// Collatz steps
+fn collatz(n: int) -> int {
+    let steps: int = 0
+    while n != 1 {
+        if (n & 1) == 0 {
+            n = n / 2
+        } else {
+            n = n * 3 + 1
+        }
+        steps = steps + 1
+    }
+    return steps
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Entry point
+// ─────────────────────────────────────────────────────────────────
+main {
+    let RECORD_SIZE: int = 276
+    let NUM_RECORDS: int = 1000
+    let NUM_THREADS: int = 4
+    let fib: int = fibonacci(35)
+    let primes: int = count_primes(1000)
+    let c_steps: int = collatz(27)
+    let g: int = gcd(fib, primes)
+    // Allocate dataset — 1000 records × 276 bytes = 276000 bytes
+    let dataset: ptr = alloc(NUM_RECORDS * RECORD_SIZE)
+    if dataset == null {
+        exit(1)
+    }
+
+    // Zero the dataset
+    memzero(dataset, NUM_RECORDS * RECORD_SIZE)
+
+    // Spawn 4 worker threads — all sharing the same dataset
+    let threads: handle[4]
+    let i: int = 0
+    while i < NUM_THREADS {
+        threads[i] = create_thread(cast(worker_thread, fnptr), dataset)
+        if threads[i] == INVALID_HANDLE {
+            exit(2)
+        }
+        i = i + 1
+    }
+
+    // Wait for all 4 threads to finish
+    wait_all(cast(threads, ptr), NUM_THREADS, INFINITE)
+
+    // Close thread handles
+    i = 0
+    while i < NUM_THREADS {
+        close_handle(threads[i])
+        i = i + 1
+    }
+
+    // Clean up and exit with processed count
+    let count: int = g_processed
+    free_mem(dataset, NUM_RECORDS * RECORD_SIZE)
+    let mat_a: ptr = alloc(16 * 4)
+    let mat_b: ptr = alloc(16 * 4)
+    let mat_c: ptr = alloc(16 * 4)
+    memzero(mat_a, 64)
+    memzero(mat_b, 64)
+    memzero(mat_c, 64)
+    mat_mul(mat_a, mat_b, mat_c, 4)
+    free_mem(mat_a, 64)
+    free_mem(mat_b, 64)
+    free_mem(mat_c, 64)
+
+    exit(count + g + c_steps)
+}

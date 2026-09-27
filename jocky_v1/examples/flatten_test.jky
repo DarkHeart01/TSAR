@@ -1,0 +1,28 @@
+// Flattening test: classify(n) with nested if/else + while loop.
+// Generates ~10 basic blocks, satisfying the >2 threshold in Flattening.cpp.
+// Expected: classify(5) = 1 (bucket) + 5 (loop) = 6, exit code 6.
+
+@obfuscate
+fn classify(n: int) -> int {
+    let result: int = 0
+    if n < 0 {
+        result = 0
+    } else {
+        if n < 10 {
+            result = 1
+        } else {
+            result = 2
+        }
+    }
+    let i: int = 0
+    while i < n {
+        result = result + 1
+        i = i + 1
+    }
+    return result
+}
+
+main {
+    let val: int = classify(5)
+    exit(val)
+}
