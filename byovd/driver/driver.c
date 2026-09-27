@@ -1,6 +1,76 @@
 #include <ntddk.h>
 #include "IoctlCommon.h"
+typedef struct _LDR_DATA_TABLE_ENTRY {
+    LIST_ENTRY     InLoadOrderLinks;
+    LIST_ENTRY     InMemoryOrderLinks;
+    LIST_ENTRY     InInitializationOrderLinks;
+    PVOID          DllBase;
+    PVOID          EntryPoint;
+    ULONG          SizeOfImage;
+    UNICODE_STRING FullDllName;
+    UNICODE_STRING BaseDllName;
+} LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
+extern LIST_ENTRY PsLoadedModuleList;
+
+ULONG_PTR GetNtoskrnlBase() {
+    PLIST_ENTRY listHead = &PsLoadedModuleList;
+    PLIST_ENTRY entry    = listHead->Flink;
+
+    // First entry in PsLoadedModuleList is always ntoskrnl
+    PLDR_DATA_TABLE_ENTRY mod = CONTAINING_RECORD(
+        entry,
+        LDR_DATA_TABLE_ENTRY,
+        InLoadOrderLinks
+    );
+
+    DbgPrint("[JOCKY] ntoskrnl base: 0x%llX, name: %wZ\n",
+             (ULONG_PTR)mod->DllBase, &mod->BaseDllName);
+
+    return (ULONG_PTR)mod->DllBase;
+}
+
+ULONG_PTR FindPspCreateProcessNotifyRoutine() {
+    ULONG_PTR ntBase = GetNtoskrnlBase();
+    if (!ntBase) {
+        DbgPrint("[JOCKY] Failed to get ntoskrnl base\n");
+        return 0;
+    }
+
+
+    UCHAR pattern[] = { 0x4C, 0x8D, 0x2D };
+    ULONG_PTR scanEnd = ntBase + 0x1000000;
+
+    for (ULONG_PTR addr = ntBase; addr < scanEnd - 7; addr++) {
+        __try {
+            UCHAR* bytes = (UCHAR*)addr;
+
+            if (bytes[0] == pattern[0] &&
+                bytes[1] == pattern[1] &&
+                bytes[2] == pattern[2]) {
+
+                // Extract 4-byte RIP-relative signed offset
+                LONG ripOffset = *(LONG*)(addr + 3);
+
+                // RIP points to next instruction (addr + 7)
+                ULONG_PTR target = addr + 7 + (ULONG_PTR)ripOffset;
+
+                // Sanity: must be within ntoskrnl
+                if (target > ntBase && target < scanEnd) {
+                    DbgPrint("[JOCKY] Candidate array at 0x%llX "
+                             "(found at 0x%llX)\n", target, addr);
+                    return target;
+                }
+            }
+        } __except(EXCEPTION_EXECUTE_HANDLER) {
+            // Skip faulting addresses
+            continue;
+        }
+    }
+
+    DbgPrint("[JOCKY] Pattern not found\n");
+    return 0;
+}
 
 void DriverUnload(PDRIVER_OBJECT DriverObject) {
     UNICODE_STRING symLink;
