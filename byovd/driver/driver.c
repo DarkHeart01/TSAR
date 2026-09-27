@@ -1,19 +1,29 @@
 #include <ntddk.h>
 #include "IoctlCommon.h"
-typedef struct _SYSTEM_PROCESS_INFORMATION {
+#define MY_SystemProcessInformation 5
+
+typedef struct _MY_SYSTEM_PROCESS_INFO {
     ULONG          NextEntryOffset;
     ULONG          NumberOfThreads;
-    LARGE_INTEGER  Reserved[3];
+    LARGE_INTEGER  WorkingSetPrivateSize;
+    ULONG          HardFaultCount;
+    ULONG          NumberOfThreadsHighWatermark;
+    ULONGLONG      CycleTime;
     LARGE_INTEGER  CreateTime;
     LARGE_INTEGER  UserTime;
     LARGE_INTEGER  KernelTime;
     UNICODE_STRING ImageName;
-    KPRIORITY      BasePriority;
+    LONG           BasePriority;
     HANDLE         UniqueProcessId;
     HANDLE         InheritedFromUniqueProcessId;
-    ULONG          HandleCount;
-    ULONG          SessionId;
-} SYSTEM_PROCESS_INFORMATION, *PSYSTEM_PROCESS_INFORMATION;
+} MY_SYSTEM_PROCESS_INFO, *PMY_SYSTEM_PROCESS_INFO;
+
+NTSTATUS ZwQuerySystemInformation(
+    ULONG  SystemInformationClass,
+    PVOID  SystemInformation,
+    ULONG  SystemInformationLength,
+    PULONG ReturnLength
+);
 
 typedef struct _LDR_DATA_TABLE_ENTRY {
     LIST_ENTRY     InLoadOrderLinks;
@@ -165,53 +175,56 @@ NTSTATUS IoControlRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
         if (outBuf && outBufLen >= sizeof(PROCESS_LIST)) {
             RtlZeroMemory(outBuf, sizeof(PROCESS_LIST));
 
-            ULONG spiSize = 512 * 1024;
-            PVOID spiBuf = ExAllocatePoolWithTag(NonPagedPool, spiSize, 'kcoJ');
-            if (!spiBuf) {
-                status = STATUS_INSUFFICIENT_RESOURCES;
-            } else {
+            ULONG bufSize = 512 * 1024;
+            PVOID sysBuffer = ExAllocatePoolWithTag(NonPagedPool, bufSize, 'kcoJ');
+
+            if (sysBuffer) {
                 ULONG retLen = 0;
-                status = ZwQuerySystemInformation(
-                    (SYSTEM_INFORMATION_CLASS)5, // SystemProcessInformation
-                    spiBuf, spiSize, &retLen
+                NTSTATUS qs = ZwQuerySystemInformation(
+                    MY_SystemProcessInformation,
+                    sysBuffer,
+                    bufSize,
+                    &retLen
                 );
 
-                if (NT_SUCCESS(status)) {
-                    PSYSTEM_PROCESS_INFORMATION entry =
-                        (PSYSTEM_PROCESS_INFORMATION)spiBuf;
+                if (NT_SUCCESS(qs)) {
+                    PMY_SYSTEM_PROCESS_INFO entry = (PMY_SYSTEM_PROCESS_INFO)sysBuffer;
                     ULONG count = 0;
 
-                    while (TRUE) {
-                        if (count < MAX_PROCESSES) {
-                            outBuf->Entries[count].Pid =
-                                (ULONG)(ULONG_PTR)entry->UniqueProcessId;
+                    while (count < MAX_PROCESSES) {
+                        outBuf->Entries[count].Pid =
+                            (ULONG)(ULONG_PTR)entry->UniqueProcessId;
 
-                            if (entry->ImageName.Buffer &&
-                                entry->ImageName.Length > 0) {
-                                ULONG nameLen =
-                                    entry->ImageName.Length / sizeof(WCHAR);
-                                if (nameLen > 15) nameLen = 15;
-                                for (ULONG j = 0; j < nameLen; j++)
-                                    outBuf->Entries[count].ImageName[j] =
-                                        (CHAR)entry->ImageName.Buffer[j];
-                                outBuf->Entries[count].ImageName[nameLen] = '\0';
-                            } else {
-                                RtlCopyMemory(outBuf->Entries[count].ImageName,
-                                              "System", 7);
-                            }
-                            count++;
+                        if (entry->ImageName.Buffer && entry->ImageName.Length > 0) {
+                            ULONG nameLen = entry->ImageName.Length / sizeof(WCHAR);
+                            if (nameLen > 15) nameLen = 15;
+                            for (ULONG j = 0; j < nameLen; j++)
+                                outBuf->Entries[count].ImageName[j] =
+                                    (CHAR)entry->ImageName.Buffer[j];
+                            outBuf->Entries[count].ImageName[nameLen] = '\0';
+                        } else {
+                            RtlCopyMemory(outBuf->Entries[count].ImageName, "System", 6);
+                            outBuf->Entries[count].ImageName[6] = '\0';
                         }
+
+                        count++;
                         if (entry->NextEntryOffset == 0) break;
-                        entry = (PSYSTEM_PROCESS_INFORMATION)(
-                            (UCHAR*)entry + entry->NextEntryOffset);
+                        entry = (PMY_SYSTEM_PROCESS_INFO)(
+                            (ULONG_PTR)entry + entry->NextEntryOffset);
                     }
 
                     outBuf->Count = count;
                     bytesReturned = sizeof(PROCESS_LIST);
+                    status = STATUS_SUCCESS;
                     DbgPrint("[JOCKY Driver] Enumerated %lu processes.\n", count);
+                } else {
+                    DbgPrint("[JOCKY Driver] ZwQuerySystemInformation failed: 0x%X\n", qs);
+                    status = qs;
                 }
 
-                ExFreePoolWithTag(spiBuf, 'kcoJ');
+                ExFreePoolWithTag(sysBuffer, 'kcoJ');
+            } else {
+                status = STATUS_INSUFFICIENT_RESOURCES;
             }
         } else {
             status = STATUS_BUFFER_TOO_SMALL;
