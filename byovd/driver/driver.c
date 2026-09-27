@@ -37,6 +37,18 @@ NTSTATUS IoControlRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
         DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_PING from User-Mode Client!\n");
         status = STATUS_SUCCESS;
 
+    } else if (ioctlCode == IOCTL_JOCKY_REMOVE_CALLBACKS) {
+        DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_REMOVE_CALLBACKS from User-Mode Client!\n");
+        status = STATUS_SUCCESS;
+
+    } else if (ioctlCode == IOCTL_JOCKY_HIDE_PROCESS) {
+        DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_HIDE_PROCESS from User-Mode Client!\n");
+        status = STATUS_SUCCESS;
+
+    } else if (ioctlCode == IOCTL_JOCKY_STEAL_TOKEN) {
+        DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_STEAL_TOKEN from User-Mode Client!\n");
+        status = STATUS_SUCCESS;
+
     } else if (ioctlCode == IOCTL_JOCKY_ENUM_PROCS) {
         PROCESS_LIST* outBuf = (PROCESS_LIST*)Irp->AssociatedIrp.SystemBuffer;
         ULONG outBufLen = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
