@@ -16,6 +16,11 @@
 #define IOCTL_JOCKY_STEAL_TOKEN \
     CTL_CODE(JOCKY_DEVICE_TYPE, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+
+typedef struct _JOCKY_PID_INPUT {
+    ULONG TargetPid;
+} JOCKY_PID_INPUT;
+ 
 // Define device type and custom IOCTL code (Function codes 0x800-0xFFF are reserved for custom drivers)
 #define JOCKY_DEVICE_TYPE 0x8000
 #define IOCTL_JOCKY_PING CTL_CODE(JOCKY_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
