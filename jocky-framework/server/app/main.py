@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from . import config, db
 from .auth import router as auth_router
 from .builds import router as builds_router
+from .targets import router as targets_router
 
 app = FastAPI(title="jocky server")
 
@@ -14,4 +15,5 @@ def startup() -> None:
 
 
 app.include_router(auth_router)
+app.include_router(targets_router)
 app.include_router(builds_router)
