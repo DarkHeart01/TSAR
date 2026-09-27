@@ -36,14 +36,51 @@ NTSTATUS IoControlRoutine(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
     if (ioctlCode == IOCTL_JOCKY_PING) {
         DbgPrint("[JOCKY Driver] Success: Received IOCTL_JOCKY_PING from User-Mode Client!\n");
         status = STATUS_SUCCESS;
+
+    } else if (ioctlCode == IOCTL_JOCKY_ENUM_PROCS) {
+        PROCESS_LIST* outBuf = (PROCESS_LIST*)Irp->AssociatedIrp.SystemBuffer;
+        ULONG outBufLen = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
+        if (outBuf && outBufLen >= sizeof(PROCESS_LIST)) {
+            RtlZeroMemory(outBuf, sizeof(PROCESS_LIST));
+
+            PEPROCESS proc = PsGetCurrentProcess();
+            PEPROCESS startProc = proc;
+            ULONG count = 0;
+
+            do {
+                if (count >= MAX_PROCESSES) break;
+
+                ULONG pid = (ULONG)(ULONG_PTR)PsGetProcessId(proc);
+                PCHAR name = (PCHAR)PsGetProcessImageFileName(proc);
+
+                outBuf->Entries[count].Pid = pid;
+                RtlCopyMemory(outBuf->Entries[count].ImageName, name, 15);
+                outBuf->Entries[count].ImageName[15] = '\0';
+                count++;
+
+                PLIST_ENTRY flink = (PLIST_ENTRY)((ULONG_PTR)proc + 0x448);
+                proc = (PEPROCESS)((ULONG_PTR)flink->Flink - 0x448);
+
+            } while (proc != startProc);
+
+            outBuf->Count = count;
+            bytesReturned = sizeof(PROCESS_LIST);
+            status = STATUS_SUCCESS;
+            DbgPrint("[JOCKY Driver] Enumerated %lu processes.\n", count);
+        } else {
+            status = STATUS_BUFFER_TOO_SMALL;
+        }
+
     } else {
         DbgPrint("[JOCKY Driver] Unknown IOCTL code received: 0x%X\n", ioctlCode);
     }
 
+    // These must be outside all branches — every code path hits them
     Irp->IoStatus.Status = status;
     Irp->IoStatus.Information = bytesReturned;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-
+    DbgPrint("[JOCKY Driver] IOCTL request completed with status: 0x%X, bytes returned: %lu\n", status, bytesReturned);
     return status;
 }
 

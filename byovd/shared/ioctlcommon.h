@@ -15,3 +15,16 @@
 #define DEVICE_NAME_SYS      L"\\Device\\JockyTestDevice"
 #define SYMBOLIC_LINK_NAME   L"\\DosDevices\\JockyTestDevice"
 #define USER_MODE_PATH       L"\\\\.\\JockyTestDevice"
+#define IOCTL_JOCKY_ENUM_PROCS CTL_CODE(JOCKY_DEVICE_TYPE, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define MAX_PROCESSES 256
+
+typedef struct _PROCESS_ENTRY {
+    ULONG Pid;
+    CHAR ImageName[16];
+} PROCESS_ENTRY;
+
+typedef struct _PROCESS_LIST {
+    ULONG Count;
+    PROCESS_ENTRY Entries[MAX_PROCESSES];
+} PROCESS_LIST;
