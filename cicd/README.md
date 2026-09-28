@@ -1,37 +1,65 @@
 # CI/CD Build Pipeline
 
-The CI/CD module is an asynchronous build automation service that compiles JOCKY scripts and C/C++ sources through the Polaris pipeline on demand. It exposes a REST API for submitting build jobs, tracks job state in Redis, and returns compiled artifacts over HTTP.
+> An asynchronous, containerised build automation service for the JOCKY compiler pipeline. Accepts source submissions over a REST API, queues them in Redis, compiles them in isolated worker containers, and serves the output binaries for download.
 
-Each build executes in an isolated, resource-constrained subprocess with a hardened environment — no inherited shell variables, strict filesystem sandboxing, and enforced CPU/memory limits.
+---
+
+## Overview
+
+A core property of TSAR is that each deployed binary must be structurally unique. Manually recompiling before every deployment does not scale. The CI/CD service automates this: it exposes a simple HTTP API for triggering builds, runs each compilation in a sandboxed worker process with strict resource limits, and stores the output artifact for retrieval.
+
+The service is designed to be trigger-friendly. It can be invoked by the operator CLI, a webhook from GitHub Actions, the endpoint management server's payload handler, or any HTTP client. The caller submits source and options, gets back a job ID, polls for completion, and downloads the artifact.
+
+Because each build runs through the full Polaris pipeline — including the polymorphic engine with a fresh random seed — no two build jobs produce the same binary, even from identical source.
 
 ---
 
 ## Architecture
 
 ```
-Client
-  │
-  │  POST /v1/build/trigger
-  ▼
-┌─────────────────────┐
-│   API Gateway       │   FastAPI (Python)
-│   (cicd/api/)       │   Validates request, enqueues job
-└──────────┬──────────┘
-           │  Redis list: build_queue:pending
-           ▼
-┌─────────────────────┐
-│   Build Worker      │   Python subprocess runner
-│   (cicd/worker/)    │   Dequeues, compiles, stores artifact
-└──────────┬──────────┘
-           │  Writes to /build_artifacts/<job_id>/
-           ▼
-┌─────────────────────┐
-│   API Gateway       │   GET /v1/build/artifact/<job_id>
-│   (artifact serve)  │   Serves output binary on completion
-└─────────────────────┘
+HTTP client (operator CLI / webhook / management server)
+        │
+        │  POST /v1/build/trigger
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  API Gateway (FastAPI)                                │
+│                                                       │
+│  - Validates request (Pydantic models)                │
+│  - Generates UUID job ID                              │
+│  - Writes job metadata to Redis hash                  │
+│  - Pushes job payload to Redis list                   │
+│  - Returns {job_id, status: QUEUED}                   │
+└──────────────────────┬────────────────────────────────┘
+                       │  Redis list: build_queue:pending
+                       │  (LPUSH / BRPOP)
+                       ▼
+┌───────────────────────────────────────────────────────┐
+│  Build Worker (Python subprocess runner)              │
+│                                                       │
+│  - BRPOP loop — blocks until a job appears            │
+│  - Validates all inputs (filenames, flags, cmake)     │
+│  - Writes source files to isolated workspace          │
+│  - Invokes cmake+ninja or clang/clang++ directly      │
+│  - Copies output binary to artifact store             │
+│  - Updates job status in Redis                        │
+│  - Cleans up workspace on completion                  │
+│                                                       │
+│  Resource limits (per job):                           │
+│    CPU: 2 cores   Memory: 2 GB   Timeout: 120–600s    │
+└──────────────────────┬────────────────────────────────┘
+                       │
+                       ▼
+              /build_artifacts/<job_id>/output_binary
+                       │
+                       ▼
+┌───────────────────────────────────────────────────────┐
+│  API Gateway                                          │
+│  GET /v1/build/artifact/{job_id}                      │
+│  Serves output binary as application/octet-stream     │
+└───────────────────────────────────────────────────────┘
 ```
 
-All three services — `redis`, `api-gateway`, and `build-worker` — run as Docker containers on an isolated bridge network. Only the API gateway publishes a host port.
+All three services run as Docker containers on an isolated bridge network (`build_net`). Only the API gateway exposes a host port. Workers and Redis are not reachable from outside the network.
 
 ---
 
@@ -39,91 +67,124 @@ All three services — `redis`, `api-gateway`, and `build-worker` — run as Doc
 
 ### `POST /v1/build/trigger`
 
-Submit a build job. Returns immediately with a `job_id`; compilation runs asynchronously.
+Submit a build job. Returns immediately with a `job_id`. Compilation runs asynchronously in a worker.
 
 **Request body:**
 
 ```json
 {
   "source_files": {
-    "payload.cpp": "<source content>",
-    "CMakeLists.txt": "<optional cmake>"
+    "payload.cpp": "// source content here",
+    "helper.h": "// optional header",
+    "CMakeLists.txt": "// optional — triggers cmake build"
   },
-  "build_flags": ["-O2", "-march=x86-64"],
+  "build_flags": ["-march=x86-64", "-Wall"],
   "cmake_flags": ["-DCMAKE_BUILD_TYPE=Release"],
   "optimization": "O2",
   "timeout_seconds": 120
 }
 ```
 
-**Response `202`:**
+**Response `202 Accepted`:**
 
 ```json
-{ "job_id": "a1b2c3d4-...", "status": "QUEUED" }
+{
+  "job_id": "a1b2c3d4-1234-5678-abcd-ef0123456789",
+  "status": "QUEUED"
+}
 ```
 
 ---
 
 ### `GET /v1/build/status/{job_id}`
 
-Poll job state.
+Poll job state. Call this until `status` is `SUCCESS` or `FAILED`.
 
-**Response `200`:**
+**Response `200 OK`:**
 
 ```json
 {
   "job_id": "a1b2c3d4-...",
   "status": "SUCCESS",
-  "created_at": "2026-01-01T00:00:00Z",
-  "started_at": "2026-01-01T00:00:01Z",
-  "finished_at": "2026-01-01T00:00:08Z",
+  "created_at": "2026-09-29T10:00:00Z",
+  "started_at": "2026-09-29T10:00:01Z",
+  "finished_at": "2026-09-29T10:00:09Z",
   "error": null,
-  "log_tail": "..."
+  "log_tail": "clang++ -O2 payload.cpp -o output_binary\n..."
 }
 ```
 
-Status values: `QUEUED` → `COMPILING` → `SUCCESS` / `FAILED`
+**Status lifecycle:**
+
+```
+QUEUED  →  COMPILING  →  SUCCESS
+                      →  FAILED
+```
 
 ---
 
 ### `GET /v1/build/artifact/{job_id}`
 
-Download the compiled binary. Returns `409` if the job has not yet succeeded.
+Download the compiled binary. Returns `409 Conflict` if the job has not completed successfully.
+
+**Response `200 OK`:** `Content-Type: application/octet-stream`
+
+Returns `404` if the job does not exist. Returns `409` if status is not `SUCCESS`.
 
 ---
 
 ### `GET /healthz`
 
-Liveness check. Returns `200 {"status": "ok"}` when Redis is reachable.
+Liveness check for load balancers and orchestrators.
+
+**Response `200 OK`:** `{"status": "ok"}`
+
+Returns `503` if Redis is unreachable.
 
 ---
 
 ## Build Worker
 
-The worker (`worker/worker.py`) runs a blocking Redis `BRPOP` loop. For each dequeued job it:
+The worker (`worker/worker.py`) runs a continuous `BRPOP` loop against the `build_queue:pending` Redis list, blocking for up to 5 seconds per iteration.
 
-1. Writes source files to an isolated workspace directory (`/build_workspace/<job_id>/`)
-2. Validates all filenames and build flags against strict allowlists before passing them to any subprocess
-3. Invokes `cmake` + `ninja` (if `CMakeLists.txt` is present) or `clang`/`clang++` directly
-4. Copies the output binary to `/build_artifacts/<job_id>/output_binary`
-5. Updates job state in Redis
+For each dequeued job:
 
-The worker can be scaled horizontally: `docker compose up --scale build-worker=N`
+1. **Validate inputs** — all filenames and flags are validated against strict allowlists before any filesystem or subprocess operation
+2. **Write sources** — source files are written to an isolated workspace at `/build_workspace/<job_id>/`
+3. **Compile** — selects the appropriate build strategy:
+   - If `CMakeLists.txt` is present: `cmake -G Ninja` configure + `cmake --build`
+   - Otherwise: direct `clang` or `clang++` invocation
+4. **Copy artifact** — output binary is copied to `/build_artifacts/<job_id>/output_binary` and the full build log to `build.log`
+5. **Update Redis** — job status, timestamps, and log tail (last 4000 chars) are written atomically
+6. **Clean workspace** — the workspace directory is deleted regardless of success or failure
+
+Workers can be scaled horizontally:
+
+```bash
+docker compose up --scale build-worker=4
+```
+
+Each worker operates independently. Redis provides the coordination — a job dequeued by one worker is invisible to all others.
 
 ---
 
 ## Input Sanitisation
 
-All user-supplied inputs are validated before reaching a subprocess. Rules enforced by `worker/sanitize.py`:
+All user-supplied inputs are validated by `worker/sanitize.py` before reaching any subprocess. Validation runs in the worker (not just the API layer) — an attacker who writes directly to Redis bypasses the API but not the worker.
 
-| Input | Rule |
-|---|---|
-| Filenames | Must match `[A-Za-z0-9][A-Za-z0-9_\-./]{0,127}\.(c\|cc\|cpp\|h\|hpp\|txt)`, no `..` or leading `/` |
-| Build flags | Must match `-[A-Za-z][A-Za-z0-9=_.\-]{0,64}`, no shell metacharacters |
-| CMake defines | Must match `-D[A-Z_][A-Z0-9_]*=[A-Za-z0-9_./\- ]{0,128}` |
-| Blocked flag prefixes | `-o`, `-I/`, `-L/`, `-B/`, `-Xclang`, `-Wl,`, `-fplugin`, and others |
+| Input | Rule | Blocked |
+|---|---|---|
+| **Filenames** | `[A-Za-z0-9][A-Za-z0-9_\-./]{0,127}\.(c\|cc\|cpp\|h\|hpp\|txt)` | `..` path traversal, absolute paths, non-source extensions |
+| **Build flags** | `-[A-Za-z][A-Za-z0-9=_.\-]{0,64}` | Shell metacharacters (`;`, `\|`, `&`, `` ` ``, `$`, `>`, `<`) |
+| **Build flag prefixes** | Allowlist-based | `-o`, `-I/`, `-L/`, `-B/`, `-Xclang`, `-Wl,`, `-fplugin`, `-fuse-ld`, etc. |
+| **CMake defines** | `-D[A-Z_][A-Z0-9_]*=[A-Za-z0-9_./\- ]{0,128}` | Anything that is not a simple `-DVAR=value` define |
 
-Subprocess environments are fully hardened: `PATH=/usr/bin:/bin`, no inherited variables, `shell=False`, CPU and address-space `rlimit` set in the child before `exec()`.
+Additionally, every subprocess is launched with:
+
+- `shell=False` — no shell interpretation of arguments
+- A hardcoded minimal environment: `PATH=/usr/bin:/bin`, `HOME=/tmp`, `LANG=C` — no inherited variables
+- `start_new_session=True` — subprocess gets its own process group; the entire group is killed on timeout
+- `setrlimit` in the child before `exec()`: CPU time limit, address space limit (2 GB), open file descriptors (256)
 
 ---
 
@@ -131,19 +192,29 @@ Subprocess environments are fully hardened: `PATH=/usr/bin:/bin`, no inherited v
 
 ```bash
 cd cicd
-cp .env.example .env   # set API_PORT, timeouts
+cp .env.example .env   # configure API_PORT, timeouts
 docker compose up --build
 ```
 
-The `docker-compose.yml` defines:
+### Services
 
-| Service | Image | Notes |
+| Service | Image | Exposed | Notes |
+|---|---|---|---|
+| `redis` | `redis:7-alpine` | Internal only | RDB persistence (60s/1-write snapshot) |
+| `api-gateway` | `./api` | `$API_PORT` (default 8000) | Mounts artifact volume read-only |
+| `build-worker` | `./worker` | Internal only | CPU: 2 cores, RAM: 2 GB; scale with `--scale` |
+
+### Environment Variables
+
+| Variable | Default | Description |
 |---|---|---|
-| `redis` | `redis:7-alpine` | Persistence with 60s/1-write RDB snapshot |
-| `api-gateway` | Built from `api/` | Mounts artifact volume read-only |
-| `build-worker` | Built from `worker/` | CPU limit 2 cores, memory limit 2 GB |
-
-Scale workers: `docker compose up --scale build-worker=3`
+| `API_PORT` | `8000` | Host port for the API gateway |
+| `DEFAULT_BUILD_TIMEOUT` | `120` | Default job timeout in seconds |
+| `MAX_BUILD_TIMEOUT` | `600` | Hard cap on any job timeout |
+| `REDIS_HOST` | `redis` | Redis hostname (within Docker network) |
+| `REDIS_PORT` | `6379` | Redis port |
+| `ARTIFACT_DIR` | `/build_artifacts` | Where completed binaries are stored |
+| `WORKSPACE_DIR` | `/build_workspace` | Ephemeral per-job workspace |
 
 ---
 
@@ -153,16 +224,28 @@ Scale workers: `docker compose up --scale build-worker=3`
 cicd/
 ├── .env.example
 ├── docker-compose.yml
+│
 ├── api/
 │   ├── Dockerfile
-│   ├── main.py          FastAPI app — trigger, status, artifact endpoints
-│   ├── models.py        Pydantic request/response models
+│   ├── main.py              FastAPI app: /trigger, /status, /artifact, /healthz
+│   ├── models.py            Pydantic request/response models + UUID validation
 │   └── requirements.txt
+│
 └── worker/
     ├── Dockerfile
-    ├── worker.py        Redis BRPOP loop + job dispatcher
-    ├── build_executor.py  Subprocess compiler invocation
-    ├── sanitize.py      Input validation and allowlisting
-    ├── redis_client.py  Redis connection helper
+    ├── worker.py            BRPOP event loop + job dispatcher
+    ├── build_executor.py    Subprocess build runner (cmake or direct clang)
+    ├── sanitize.py          Input validation and allowlisting
+    ├── redis_client.py      Redis connection helper with retry
     └── requirements.txt
 ```
+
+---
+
+## Relationship to Other Components
+
+| Component | Relationship |
+|---|---|
+| `compiler/` | The worker ultimately calls `jocky.exe` from the compiler pipeline to perform obfuscated builds |
+| `jocky-framework/` | The operator CLI provides an interactive alternative to this service for human-driven builds |
+| `endpoint-management-server/` | The payload handler can trigger builds via this service's webhook endpoint and retrieve the artifact for delivery to agents |
