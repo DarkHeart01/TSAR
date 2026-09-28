@@ -1,48 +1,97 @@
-# JOCKY C2 Dashboard
+# JOCKY Operator Dashboard
 
-A sophisticated Command & Control dashboard for the JOCKY evasive digital forensics framework.
+The operator dashboard is the management UI for the JOCKY framework. It provides a real-time view of registered endpoints, a payload builder that triggers the Polaris compiler pipeline, and a live telemetry stream.
+
+Built with React + Vite + Tailwind CSS on the frontend and Go/Gin on the backend.
+
+---
+
+## Architecture
+
+```
+Browser
+  │
+  │  HTTP  (Vite dev proxy / nginx in prod)
+  ▼
+┌────────────────────────┐
+│   React frontend       │
+│   src/                 │   Vite + Tailwind + lucide-react
+│   ├── Endpoint list    │
+│   ├── Payload builder  │
+│   └── Telemetry stream │
+└───────────┬────────────┘
+            │  /api/*  proxied
+            ▼
+┌────────────────────────┐
+│   Go / Gin backend     │
+│   backend/             │
+│   ├── endpoints.go     │   Agent registration and status
+│   ├── build.go         │   Payload build trigger → CI/CD pipeline
+│   └── telemetry.go     │   Telemetry ingestion and streaming
+└────────────────────────┘
+```
+
+---
 
 ## Features
 
-- **Real-time Endpoint Monitoring**: Track active connections with detailed system information
-- **Polymorphic Payload Builder**: Generate evasive payloads with LLVM obfuscation
-- **Live Telemetry Stream**: Monitor operations in real-time with color-coded events
-- **Professional Dark Theme**: Cybersecurity-focused UI with neon accents
+- **Endpoint Monitoring** — real-time list of registered agents with status, last-seen time, and system metadata
+- **Payload Builder** — form-driven interface for configuring and triggering a Polaris build job via the CI/CD API; displays job status and downloads the artifact on completion
+- **Telemetry Stream** — live colour-coded event feed showing agent activity, task results, and system events
 
-## Quick Start
+---
 
-### Using Docker Compose (Recommended)
+## Running
+
+### Docker (recommended)
 
 ```bash
+cd c2-client
 docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) for the dashboard. The backend API runs on [http://localhost:8080](http://localhost:8080).
+- Dashboard: `http://localhost:3000`
+- Backend API: `http://localhost:8080`
 
-### Local Development
+### Local development
 
 **Backend:**
 
 ```bash
-cd backend
+cd c2-client/backend
 go run .
 ```
 
 **Frontend:**
 
 ```bash
-cd frontend
+cd c2-client/frontend
 npm install
 npm run dev
 ```
 
 The Vite dev server proxies `/api` requests to `http://localhost:8080`.
 
-## Project Structure
+---
+
+## Directory Layout
 
 ```
-C2/
-├── docker-compose.yml    # Orchestrates backend + frontend
-├── backend/              # Go/Gin API server
-└── frontend/             # React + Vite + Tailwind UI
+c2-client/
+├── docker-compose.yml
+├── backend/
+│   ├── Dockerfile
+│   ├── main.go              Gin server, route wiring
+│   ├── handlers/
+│   │   ├── endpoints.go     Agent registration and status endpoints
+│   │   ├── build.go         Build trigger and artifact retrieval
+│   │   └── telemetry.go     Telemetry ingestion and SSE stream
+│   ├── go.mod
+│   └── go.sum
+└── frontend/
+    ├── Dockerfile
+    ├── nginx.conf           Production static file server + API proxy
+    ├── index.html
+    ├── src/                 React components and pages
+    └── dist/                Production build output
 ```

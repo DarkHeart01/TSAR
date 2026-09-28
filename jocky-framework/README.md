@@ -1,86 +1,149 @@
-# jocky
+# JOCKY Framework — Operator CLI and Build Server
 
-A remote build CLI: a client REPL uploads a `.cpp` file to a server, which compiles it with a
-custom compiler and streams the compile log back live. Not a judge — there are no test cases or
-scoring, just remote compilation, logs, and build history.
+The `jocky-framework` directory contains the operator-facing toolchain for driving the JOCKY compiler pipeline: a Python FastAPI build server and a terminal-based interactive shell client. Operators write JOCKY scripts locally, submit them through the encrypted CLI, and stream real-time compiler output back to their terminal.
 
-- **Client** (`client/`): Python, interactive shell built on the standard library `cmd` module,
-  packaged into a standalone `jocky.exe` with PyInstaller.
-- **Server** (`server/`): Python, FastAPI over plain HTTP only (no WebSockets, no persistent
-  connections). Receives uploads, shells out to the custom compiler, buffers its stdout in memory,
-  and keeps a SQLite history of builds. The client fetches new log lines by polling.
-- **Compiler** (`compiler/`): the custom compiler project, its own repo living at this same root.
-  The server invokes the built binary at `compiler/jocky/driver/jocky.exe`.
+This is the primary workflow interface for the framework — the component a researcher interacts with directly when developing and deploying analysis scripts.
 
-> Security note: the server shells out to the compiler directly with **no sandboxing**. This is
-> intended for a trusted, local/private network only — do not expose it to untrusted clients or
-> the public internet without adding isolation first.
+---
 
-## Source encryption
-
-The uploaded `.cpp` source is encrypted client-side with AES-256-GCM before it's sent, and
-decrypted server-side after receiving it — a network eavesdropper sees only ciphertext, not your
-code. The key is derived from the shared connect token via HKDF-SHA256 (`client/jocky_client/crypto.py`
-and `server/app/crypto.py`), so both sides compute the same key from the token they already share;
-nothing new needs to be distributed. AES-GCM is authenticated encryption, so a tampered or
-corrupted upload fails to decrypt (`400 failed to decrypt uploaded file`) instead of silently
-compiling garbage.
-
-This only covers the uploaded source file. The auth token, filenames, compile logs, and session
-history still travel as plain HTTP — add TLS in front of the server if those need protecting too.
-
-## Server setup
+## Architecture
 
 ```
-cd server
+Operator machine                        Build server
+┌──────────────────────────────┐        ┌──────────────────────────────┐
+│  jocky CLI (Python)          │        │  FastAPI server (Python)     │
+│  jocky_client/               │        │  server/app/                 │
+│                              │        │                              │
+│  JockyShell  ──connect──────►│─HTTPS─►│  POST /api/connect           │
+│             │                │        │  (token auth)                │
+│             └─build──────────│─HTTPS─►│  POST /api/build             │
+│               (encrypted)   │        │  (AES-256-GCM source upload) │
+│                              │        │       │                      │
+│  <stream compiler logs>      │◄───────│  GET  /api/build/{id}/logs   │
+│                              │        │       │                      │
+└──────────────────────────────┘        │  invokes Polaris compiler    │
+                                        │  (compiler/ pipeline)        │
+                                        └──────────────────────────────┘
+```
+
+---
+
+## Components
+
+### Server (`server/`)
+
+A FastAPI application that:
+
+- Authenticates operators via a shared bearer token (`POST /api/connect`)
+- Receives encrypted source file uploads (`POST /api/build`)
+- Decrypts the source, invokes the Polaris compiler (`compiler/jocky/driver/jocky.exe`) with the specified obfuscation passes
+- Streams compiler output line-by-line into a log buffer
+- Exposes build logs and status for polling (`GET /api/build/{id}/logs`)
+- Lists past build sessions (`GET /api/sessions`)
+
+Key modules:
+
+| File | Purpose |
+|---|---|
+| `app/auth.py` | Bearer token validation, `/api/connect` endpoint |
+| `app/compiler.py` | Async subprocess wrapper around the Polaris compiler CLI |
+
+The compiler is invoked as:
+
+```
+<COMPILER_PATH> <source> -o <output> "-passes=<passes>" -v
+```
+
+### Client (`client/`)
+
+A `cmd.Cmd`-based interactive terminal shell distributed as a standalone executable (PyInstaller `.spec` provided). Key commands:
+
+| Command | Description |
+|---|---|
+| `connect --addr <ip:port> --token <token>` | Authenticate and link to a build server |
+| `build --template <path> --output <name> --passes <passes>` | Upload a source file and stream compile logs |
+| `sessions` / `history` | List past build jobs with status and exit codes |
+| `exit` / `quit` | Exit the shell |
+
+Credentials are saved to disk after a successful `connect` so they persist across shell restarts.
+
+---
+
+## Encrypted Transport
+
+Source files are encrypted before upload using **AES-256-GCM**:
+
+- The key is derived from the shared connect token using **HKDF-SHA256** with a fixed salt and info string
+- A fresh 12-byte random nonce is generated per upload
+- The filename is passed as authenticated associated data — a file submitted with a different name will fail to decrypt
+- The server and client share identical `crypto.py` implementations; the same derivation and construction must be used on both sides
+
+This ensures source files are never transmitted in plaintext, even over plain HTTP in a local network context.
+
+---
+
+## Running
+
+### Build server
+
+```bash
+cd jocky-framework/server
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env   # then edit JOCKY_TOKENS as needed
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Set the required env vars (from `.env`, or directly in the shell) and run:
+Set `COMPILER_PATH` in the environment (or `app/config.py`) to point to `compiler/jocky/driver/jocky.exe`.
 
-```
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
+### CLI client
 
-`JOCKY_TOKENS` is a comma-separated `token:client_name` list; only these tokens can `connect`.
-The server expects the compiler binary at `compiler/jocky/driver/jocky.exe` (relative to the repo
-root) by default; set `COMPILER_PATH` to override.
-
-## Client setup
-
-```
-cd client
+```bash
+cd jocky-framework/client
 pip install -r requirements.txt
-python -m jocky_client        # run directly during development
+python -m jocky_client
 ```
 
-To build the standalone `jocky.exe`:
+Or build a standalone executable:
 
-```
+```bash
 pyinstaller jocky.spec
+# Output: dist/jocky.exe
 ```
 
-The binary is written to `client/dist/jocky.exe`. Copy it anywhere on the target machine and run
-`jocky` from any shell (bash/PowerShell/cmd) to drop into the REPL.
+### Connecting
 
-## REPL commands
+```
+jocky > connect --addr 192.168.1.10:8000 --token <your-token>
+connected to 192.168.1.10:8000 as operator
 
-- `connect --addr <ip:port> --token <token>` — authenticate and link this shell to a server.
-- `build --template <path> --output <name> --passes <passes>` — upload a local `.cpp` file and
-  poll for compiler log output (every ~0.4s over plain HTTP, no persistent connection) until it finishes.
-- `sessions` / `history` — list past builds for the connected token.
-- `exit` / `quit` — leave the shell.
-- `help` — list all commands (auto-generated by `cmd.Cmd` from each command's docstring).
+jocky > build --template payload.jky --output agent.exe --passes fla,sub,api-hash
+build a1b2c3d4 submitted, polling for logs...
+[compiler] Stage 3: poly_engine.py — variable rename pass
+[compiler] Stage 1A: Polaris clang — fla,sub,api-hash
+[compiler] Stage 6: pe_header_spoofer.py
+BUILD SUCCEEDED (exit 0)
+```
 
-## Quick end-to-end test
+---
 
-1. Start the server (see above), with `JOCKY_TOKENS=devtoken123:dev-client` set and a working
-   `compiler/jocky/driver/jocky.exe` in place.
-2. Run the client, then in the REPL:
-   ```
-   connect --addr 127.0.0.1:8000 --token devtoken123
-   build --template test.cpp --output test.exe --passes 1
-   sessions
-   exit
-   ```
+## Directory Layout
+
+```
+jocky-framework/
+├── server/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── auth.py          Bearer token auth + /api/connect
+│   │   └── compiler.py      Async Polaris compiler invocation
+│   └── .venv/               Python virtual environment
+└── client/
+    ├── jocky.spec            PyInstaller build spec
+    └── jocky_client/
+        ├── __main__.py       Entry point, Windows ANSI setup
+        ├── shell.py          cmd.Cmd interactive shell (JockyShell)
+        ├── api.py            HTTP client — connect, build, poll, sessions
+        ├── crypto.py         AES-256-GCM + HKDF-SHA256 source encryption
+        ├── config.py         Credential persistence
+        └── banner.py         ASCII art banner
+```

@@ -12,7 +12,10 @@ client/build/
 server/data/
 server/jocky.db
 server/.env
+server/server-config/
+server-config/
 
 # OS
 .DS_Store
 Thumbs.db
+
