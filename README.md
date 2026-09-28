@@ -116,22 +116,6 @@ docker compose up --build
 
 ---
 
-## Detection Benchmarks
-
-Benchmark binary compiled with default passes (`fla+sub+api-hash`):
-
-| Engine | Detection | Type |
-|---|---|---|
-| CrowdStrike Falcon | Win/malicious_confidence_70% | Cloud ML |
-| DeepInstinct | MALICIOUS | Deep neural network |
-| McAfee | Ti! (hash-based) | Ephemeral — changes each build |
-| SentinelOne Static ML | Static AI - Suspicious PE | Static heuristic |
-| All others (67/71) | Clean | — |
-
-The 4/71 result is a hard floor gated on code signing. All four detections are cloud/ML engines. The binary is undetected by every signature-based and static-heuristic scanner in the test set.
-
----
-
 ## Repository Layout
 
 ```
