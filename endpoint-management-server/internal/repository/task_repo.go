@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 
 	"github.com/google/uuid"
 	"endpoint-management-server/internal/models"
@@ -81,6 +82,64 @@ func (r *TaskRepository) GetByID(ctx context.Context, taskID uuid.UUID) (*models
 		return nil, err
 	}
 	return task, nil
+}
+
+// IncrementRetryCount atomically bumps retry_count and returns the new value.
+// Called in the poll handler before each task is dispatched so we know
+// how many delivery attempts have been made.
+func (r *TaskRepository) IncrementRetryCount(ctx context.Context, taskID uuid.UUID) (int, error) {
+	var newCount int
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE endpoint_mgmt.tasks
+		SET retry_count = retry_count + 1
+		WHERE task_id = $1
+		RETURNING retry_count`,
+		taskID,
+	).Scan(&newCount)
+	if err != nil {
+		return 0, fmt.Errorf("increment retry count: %w", err)
+	}
+	return newCount, nil
+}
+
+// MarkFailedFinal sets status='failed' without touching retry_count
+// (IncrementRetryCount already bumped it before this is called).
+func (r *TaskRepository) MarkFailedFinal(ctx context.Context, taskID uuid.UUID, msg string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE endpoint_mgmt.tasks
+		SET status = 'failed', error_message = $2
+		WHERE task_id = $1`,
+		taskID, msg,
+	)
+	if err != nil {
+		return fmt.Errorf("mark failed final: %w", err)
+	}
+	return nil
+}
+
+// ExpireStale batch-updates pending tasks whose expires_at has passed.
+// Returns the UUIDs of every task that was expired so callers can write
+// individual audit log entries.
+func (r *TaskRepository) ExpireStale(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		UPDATE endpoint_mgmt.tasks
+		SET status = 'expired'
+		WHERE status = 'pending' AND expires_at < NOW()
+		RETURNING task_id`)
+	if err != nil {
+		return nil, fmt.Errorf("expire stale tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("expire stale scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (r *TaskRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, limit int) ([]models.Task, error) {

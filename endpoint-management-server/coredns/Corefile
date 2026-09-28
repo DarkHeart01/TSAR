@@ -1,0 +1,13 @@
+jocky.online:53 {
+    file /etc/coredns/zones/jocky.online.zone
+    log
+    errors
+    reload 5s
+}
+
+https://.:443 {
+    tls /etc/letsencrypt/live/c2.jocky.online/fullchain.pem \
+        /etc/letsencrypt/live/c2.jocky.online/privkey.pem
+    forward . 127.0.0.1:53
+    log
+}

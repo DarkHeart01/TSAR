@@ -19,14 +19,30 @@ type AgentHandler struct {
 	agentRepo     *repository.AgentRepository
 	taskRepo      *repository.TaskRepository
 	telemetryRepo *repository.TelemetryRepository
+	auditRepo     *repository.AuditRepository
 	taskQueue     *queue.TaskQueue
+	maxRetries    int
 }
 
-func NewAgentHandler(agentRepo *repository.AgentRepository, taskRepo *repository.TaskRepository, telemetryRepo *repository.TelemetryRepository, taskQueue *queue.TaskQueue) *AgentHandler {
-	return &AgentHandler{agentRepo: agentRepo, taskRepo: taskRepo, telemetryRepo: telemetryRepo, taskQueue: taskQueue}
+func NewAgentHandler(
+	agentRepo *repository.AgentRepository,
+	taskRepo *repository.TaskRepository,
+	telemetryRepo *repository.TelemetryRepository,
+	auditRepo *repository.AuditRepository,
+	taskQueue *queue.TaskQueue,
+	maxRetries int,
+) *AgentHandler {
+	return &AgentHandler{
+		agentRepo:     agentRepo,
+		taskRepo:      taskRepo,
+		telemetryRepo: telemetryRepo,
+		auditRepo:     auditRepo,
+		taskQueue:     taskQueue,
+		maxRetries:    maxRetries,
+	}
 }
 
-// Register handles POST /api/v1/agent/register
+// Register handles POST /api/v1/agent/register.
 // Registers a new endpoint agent and returns a one-time bearer token.
 func (h *AgentHandler) Register(c *gin.Context) {
 	var req models.RegisterAgentRequest
@@ -42,28 +58,35 @@ func (h *AgentHandler) Register(c *gin.Context) {
 	}
 	hashedToken := middleware.HashToken(rawToken)
 
-	agent, err := h.agentRepo.Create(c.Request.Context(), req.Hostname, req.IPAddress, hashedToken, req.Metadata)
+	ctx := c.Request.Context()
+	agent, err := h.agentRepo.Create(ctx, req.Hostname, req.IPAddress, hashedToken, req.Metadata)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register agent"})
 		return
 	}
 
+	_ = h.auditRepo.Write(ctx, "agent_register", "agent", &agent.AgentID, c.ClientIP(), map[string]interface{}{
+		"hostname":   req.Hostname,
+		"ip_address": req.IPAddress,
+	})
+
 	c.JSON(http.StatusCreated, models.RegisterAgentResponse{
 		AgentID:   agent.AgentID,
-		AuthToken: rawToken, // returned once; caller must persist it
-		ExpiresIn: 0,        // token does not expire until rotated/revoked
+		AuthToken: rawToken,
+		ExpiresIn: 0,
 	})
 }
 
-// Poll handles GET /api/v1/agent/poll
+// Poll handles GET /api/v1/agent/poll.
 // Invoked periodically by a registered agent to fetch queued tasks.
+// For each task popped: increments retry_count, and if >= maxRetries marks
+// the task failed without delivering it to the agent.
 func (h *AgentHandler) Poll(c *gin.Context) {
 	agentVal, _ := c.Get(middleware.AgentContextKey)
 	agent := agentVal.(*models.Agent)
 
 	ctx := c.Request.Context()
 
-	// Prevent a retried/duplicate poll from double-draining the queue.
 	locked, err := h.taskQueue.AcquirePollLock(ctx, agent.AgentID, 5*time.Second)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "poll lock failure"})
@@ -88,6 +111,22 @@ func (h *AgentHandler) Poll(c *gin.Context) {
 
 	tasks := make([]models.Task, 0, len(queued))
 	for _, qt := range queued {
+		retries, err := h.taskRepo.IncrementRetryCount(ctx, qt.TaskID)
+		if err != nil {
+			continue
+		}
+
+		if retries >= h.maxRetries {
+			msg := "max retries reached"
+			_ = h.taskRepo.MarkFailedFinal(ctx, qt.TaskID, msg)
+			_ = h.auditRepo.Write(ctx, "task_max_retries", "task", &qt.TaskID, c.ClientIP(), map[string]interface{}{
+				"agent_id":    agent.AgentID,
+				"retry_count": retries,
+				"max_retries": h.maxRetries,
+			})
+			continue
+		}
+
 		if err := h.taskRepo.MarkSent(ctx, qt.TaskID); err != nil {
 			continue
 		}
@@ -140,14 +179,16 @@ func (h *AgentHandler) CreateTask(c *gin.Context) {
 		return
 	}
 
+	_ = h.auditRepo.Write(ctx, "task_create", "task", &task.TaskID, c.ClientIP(), map[string]interface{}{
+		"agent_id":     agentID,
+		"command_type": body.CommandType,
+	})
+
 	c.JSON(http.StatusCreated, task)
 }
 
-// Telemetry handles POST /api/v1/agent/telemetry
+// Telemetry handles POST /api/v1/agent/telemetry.
 // Receives JSON logs/metrics from an authenticated agent and persists them.
-// Payload is expected to already be transport-encrypted via TLS 1.3;
-// application-layer envelope encryption can additionally be verified here
-// if a shared/agent-specific key is configured.
 func (h *AgentHandler) Telemetry(c *gin.Context) {
 	agentVal, _ := c.Get(middleware.AgentContextKey)
 	agent := agentVal.(*models.Agent)

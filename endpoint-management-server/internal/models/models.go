@@ -111,6 +111,36 @@ func (nt *NullTime) Scan(value interface{}) error {
 	return nil
 }
 
+// Operator represents a human operator who manages agents via the control plane.
+type Operator struct {
+	OperatorID   uuid.UUID `json:"operator_id"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// OperatorLoginRequest is the body for POST /api/v1/operator/login.
+type OperatorLoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// OperatorLoginResponse returns the signed JWT and when it expires.
+type OperatorLoginResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// PayloadManifest is stored in Redis and served as a DNS TXT record so
+// agents know how many chunks to fetch and can verify integrity.
+type PayloadManifest struct {
+	TotalChunks int    `json:"total_chunks"`
+	TotalSize   int    `json:"total_size"`
+	SHA256      string `json:"sha256"`
+	Version     string `json:"version"`
+	UploadedAt  string `json:"uploaded_at"`
+}
+
 // NullUUID wraps uuid.UUID to handle NULL values
 type NullUUID struct {
 	UUID  uuid.UUID
