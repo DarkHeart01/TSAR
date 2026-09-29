@@ -77,7 +77,7 @@ func main() {
 
 	// Build handlers.
 	agentHandler := handlers.NewAgentHandler(
-		agentRepo, taskRepo, telemetryRepo, auditRepo, taskQueue, cfg.MaxRetries,
+		agentRepo, taskRepo, telemetryRepo, auditRepo, taskQueue, cfg.MaxRetries, cfg.BundlePath,
 	)
 	operatorHandler := handlers.NewOperatorHandler(operatorRepo, auditRepo, cfg.OperatorSecret)
 	payloadHandler  := handlers.NewPayloadHandler(

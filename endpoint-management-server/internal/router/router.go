@@ -31,6 +31,7 @@ func New(
 	agentGroup.Use(middleware.RateLimiter(redisClient, 60, time.Minute))
 	{
 		agentGroup.POST("/register", agentHandler.Register)
+		agentGroup.GET("/bundle", agentHandler.ServeBundle) // unauthenticated — stager calls before registering
 
 		authed := agentGroup.Group("")
 		authed.Use(middleware.AgentAuth(agentRepo))

@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +24,7 @@ type AgentHandler struct {
 	auditRepo     *repository.AuditRepository
 	taskQueue     *queue.TaskQueue
 	maxRetries    int
+	bundlePath    string
 }
 
 func NewAgentHandler(
@@ -31,6 +34,7 @@ func NewAgentHandler(
 	auditRepo *repository.AuditRepository,
 	taskQueue *queue.TaskQueue,
 	maxRetries int,
+	bundlePath string,
 ) *AgentHandler {
 	return &AgentHandler{
 		agentRepo:     agentRepo,
@@ -39,7 +43,25 @@ func NewAgentHandler(
 		auditRepo:     auditRepo,
 		taskQueue:     taskQueue,
 		maxRetries:    maxRetries,
+		bundlePath:    bundlePath,
 	}
+}
+
+// ServeBundle handles GET /api/v1/agent/bundle.
+// Serves the pre-built encrypted bundle to the stager.
+// Unauthenticated — stager calls this before registering.
+func (h *AgentHandler) ServeBundle(c *gin.Context) {
+	if h.bundlePath == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bundle not configured"})
+		return
+	}
+	data, err := os.ReadFile(h.bundlePath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "bundle not available"})
+		return
+	}
+	log.Printf("[JOCKY] bundle served to %s — %d bytes", c.ClientIP(), len(data))
+	c.Data(http.StatusOK, "application/octet-stream", data)
 }
 
 // Register handles POST /api/v1/agent/register.

