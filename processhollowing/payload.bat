@@ -20,4 +20,4 @@ REM Verify entry point is set correctly
 echo [*] Verifying entry point...
 dumpbin /headers payload.exe | findstr "entry point"
 
-echo [+] 
+echo [+]

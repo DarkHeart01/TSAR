@@ -1,26 +1,28 @@
 {
-    "configurations": [
-        {
-            "name": "Win32-WDK",
-            "includePath": [
-                "${workspaceFolder}/byovd/driver/**",
-                "${workspaceFolder}/byovd/user/**",
-                "${workspaceFolder}/byovd/shared/**",
-                "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/km",
-                "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/km/crt",
-                "C:/Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/shared",
-                "C:/Program Files (x86)/Windows Kits/10/Include/wdf/kmdf/1.15"
-            ],
-            "defines": [
-                "_KERNEL_MODE",
-                "_AMD64_",
-                "AMD64"
-            ],
-            "windowsSdkVersion": "10.0.28000.0",
-            "cStandard": "c17",
-            "cppStandard": "c++17",
-            "intelliSenseMode": "windows-msvc-x64"
-        }
-    ],
-    "version": 4
+  "configurations": [
+    {
+      "name": "Win32",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um",
+        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared",
+        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/winrt",
+        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt",
+        "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/include"
+      ],
+      "defines": [
+        "_WIN32",
+        "WIN32",
+        "WIN64",
+        "_WIN64",
+        "WIN32_LEAN_AND_MEAN",
+        "_MT"
+      ],
+      "compilerPath": "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+      "cStandard": "c17",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "windows-msvc-x64"
+    }
+  ],
+  "version": 4
 }
