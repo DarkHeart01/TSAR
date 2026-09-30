@@ -1,1 +1,48 @@
-*.bat
+# run from the repo root
+cat > .gitignore << 'EOF'
+# ── Compiled binaries ─────────────────────────────────────
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.sys
+
+# ── Generated artifacts ───────────────────────────────────
+bundle.bin
+
+# ── Secrets — never commit real .env ─────────────────────
+.env
+!.env.example
+!*/.env.example
+!**/.env.example
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Build server runtime data (temp compile dirs + db) ───
+jocky-framework/server/data/
+jocky-framework/server/jocky.db
+jocky-framework/server_log.txt
+
+# ── CMake build trees ─────────────────────────────────────
+build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/.cmake/
+
+# ── Node / frontend ───────────────────────────────────────
+node_modules/
+c2-client/frontend/dist/
+jocky-framework/client/dist/
+
+# ── IDE ───────────────────────────────────────────────────
+.vscode/
+*.vcxproj.user
+
+# ── Logs / debug ──────────────────────────────────────────
+*.log
+stager_debug.log
+EOF

@@ -123,10 +123,11 @@ def rename_variables(content):
         varname  = m.group(3)
         suffix   = m.group(4)
 
-        # Skip: already renamed, loop vars, common names to keep
-        skip = {'i', 'j', 'k', 'n', 'x', 'y', 'z', 'result', 'ret',
-                'main', 'argc', 'argv', 'NULL', 'TRUE', 'FALSE'}
-        if varname in skip or varname.startswith('__jk_'):
+        # Skip: single-char names (appear in #include paths), loop vars, common names
+        skip = {'i', 'j', 'k', 'n', 'x', 'y', 'z', 'h', 'l', 'm', 'p',
+                's', 't', 'v', 'w', 'c', 'e', 'f', 'r',
+                'result', 'ret', 'main', 'argc', 'argv', 'NULL', 'TRUE', 'FALSE'}
+        if len(varname) == 1 or varname in skip or varname.startswith('__jk_'):
             return m.group(0)
 
         if varname not in rename_map:
@@ -137,13 +138,13 @@ def rename_variables(content):
 
     new_content = pattern.sub(replacer, content)
 
-    # Apply rename map to all usages of renamed vars
+    # Apply rename map to all usages — skip preprocessor lines (#include, #define, etc.)
     for original, renamed_name in rename_map.items():
-        # Only rename standalone word occurrences
-        new_content = re.sub(
-            r'\b' + re.escape(original) + r'\b',
-            renamed_name,
-            new_content
+        pat = re.compile(r'\b' + re.escape(original) + r'\b')
+        lines = new_content.split('\n')
+        new_content = '\n'.join(
+            line if line.lstrip().startswith('#') else pat.sub(renamed_name, line)
+            for line in lines
         )
 
     return new_content, renamed
