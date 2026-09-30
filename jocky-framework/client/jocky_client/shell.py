@@ -13,6 +13,11 @@ from .c2_api import C2ApiClient
 POLL_INTERVAL_SECONDS = 0.4
 
 
+def _split(arg: str) -> list:
+    """shlex.split that survives Windows backslash paths."""
+    return shlex.split(arg.replace("\\", "/"))
+
+
 class ArgParseExit(Exception):
     pass
 
@@ -74,7 +79,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--addr",  required=True)
         parser.add_argument("--token", required=True)
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -100,7 +105,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--output",   required=True)
         parser.add_argument("--passes",   default="")
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -184,7 +189,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--user", required=True)
         parser.add_argument("--pass", dest="password", required=True)
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -207,7 +212,7 @@ class JockyShell(cmd.Cmd):
         parser = _Parser(prog="targets", add_help=False)
         parser.add_argument("--limit", type=int, default=100)
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -238,7 +243,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--cmd",   required=True)
         parser.add_argument("--data",  default="{}")
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -278,7 +283,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--agent", required=True)
         parser.add_argument("--limit", type=int, default=20)
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -308,7 +313,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--agent", required=True)
         parser.add_argument("--limit", type=int, default=20)
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -339,7 +344,7 @@ class JockyShell(cmd.Cmd):
         parser = _Parser(prog="shell", add_help=False)
         parser.add_argument("--agent", required=True)
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 
@@ -403,7 +408,7 @@ class JockyShell(cmd.Cmd):
         if not self._require_c2():
             return
 
-        parts = shlex.split(arg)
+        parts = _split(arg)
         if not parts:
             print("usage: payload upload --file <path>  |  payload status")
             return
@@ -441,7 +446,7 @@ class JockyShell(cmd.Cmd):
         if not self._require_c2():
             return
 
-        parts = shlex.split(arg)
+        parts = _split(arg)
         if not parts or parts[0] != "upload":
             print("usage: bundle upload --file <path>")
             return
@@ -482,7 +487,7 @@ class JockyShell(cmd.Cmd):
         parser.add_argument("--aes-key",   dest="aes_key", default=None,
                             help="64-char hex AES key (reads JOCKY_AES_KEY env var if omitted)")
         try:
-            args = parser.parse_args(shlex.split(arg))
+            args = parser.parse_args(_split(arg))
         except ArgParseExit:
             return
 

@@ -150,6 +150,12 @@ int main(int argc, char* argv[]) {
     const char* libvcruntime =
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\18"
         "\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\lib\\x64\\vcruntime.lib";
+    const char* winhttp_lib =
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\winhttp.lib";
+    const char* bcrypt_lib =
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\bcrypt.lib";
+    const char* crypt32_lib =
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\crypt32.lib";
 
     if (!file_exists(polaris_clang)) {
         printf("[!] Polaris clang not found: %s\n", polaris_clang);
@@ -281,11 +287,12 @@ int main(int argc, char* argv[]) {
         snprintf(cmd, sizeof(cmd),
             "\"%s\" "
             "-target x86_64-pc-windows-msvc "
-            "-o \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
+            "-o \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
             polaris_clang,
             raw_exe, obj_file,
             ucrt_lib, kernel32_lib, libcmt, libvcruntime,
-            user32_lib, ws2_32_lib, advapi32_lib);
+            user32_lib, ws2_32_lib, advapi32_lib,
+            winhttp_lib, bcrypt_lib, crypt32_lib);
     }
 
 
