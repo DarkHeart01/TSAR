@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -101,8 +102,11 @@ func (h *PayloadHandler) Upload(c *gin.Context) {
 		port = uint16(p)
 	}
 
+	log.Printf("[payload] upload from %s: %d raw bytes, ip=%s port=%d", c.ClientIP(), len(rawPayload), ip, port)
+
 	chunks, sha256hex, err := c2.ProcessPayload(rawPayload, h.aesKey, ip, port)
 	if err != nil {
+		log.Printf("[payload] ProcessPayload error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("pipeline: %v", err)})
 		return
 	}
@@ -119,6 +123,7 @@ func (h *PayloadHandler) Upload(c *gin.Context) {
 
 	// Persist each chunk in Redis for the direct HTTPS fallback endpoint.
 	if err := h.storeChunks(ctx, chunks); err != nil {
+		log.Printf("[payload] storeChunks error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cache chunks in Redis"})
 		return
 	}
@@ -126,12 +131,14 @@ func (h *PayloadHandler) Upload(c *gin.Context) {
 	// Persist manifest in Redis.
 	manifestJSON, _ := json.Marshal(manifest)
 	if err := h.redis.Set(ctx, redisKeyManifest, manifestJSON, redisChunkTTL*time.Second).Err(); err != nil {
+		log.Printf("[payload] Redis manifest error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store manifest"})
 		return
 	}
 
 	// Write DNS zone file.
 	if err := c2.WriteZoneFile(h.zoneFilePath, h.ec2IP, chunks, manifest); err != nil {
+		log.Printf("[payload] WriteZoneFile error: path=%s ec2ip=%s err=%v", h.zoneFilePath, h.ec2IP, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("zone write: %v", err)})
 		return
 	}

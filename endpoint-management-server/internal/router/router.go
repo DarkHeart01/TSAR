@@ -41,8 +41,9 @@ func New(
 		}
 	}
 
-	// Direct HTTPS chunk fallback — no operator auth needed (agent calls it).
+	// Payload endpoints — no auth needed (agent calls these before registering or with agent token).
 	v1.GET("/payload/chunk/:index", payloadHandler.Chunk)
+	v1.GET("/payload/status",       payloadHandler.Status) // agent-accessible alias (no operator JWT)
 
 	// ── Operator routes (JWT) ─────────────────────────────────────────────
 	op := v1.Group("/operator")
