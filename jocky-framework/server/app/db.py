@@ -88,6 +88,15 @@ def update_build(build_id: str, status: str, exit_code: int, log: str) -> None:
         conn.commit()
 
 
+def get_build(build_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, token, filename, output_name, passes, status, exit_code, created_at FROM builds WHERE id = ?",
+            (build_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def list_builds(token: str) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(

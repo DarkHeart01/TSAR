@@ -2,13 +2,17 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"endpoint-management-server/internal/auth"
 	"endpoint-management-server/internal/middleware"
@@ -25,6 +29,7 @@ type AgentHandler struct {
 	taskQueue     *queue.TaskQueue
 	maxRetries    int
 	bundlePath    string
+	redisClient   *redis.Client
 }
 
 func NewAgentHandler(
@@ -35,6 +40,7 @@ func NewAgentHandler(
 	taskQueue *queue.TaskQueue,
 	maxRetries int,
 	bundlePath string,
+	redisClient *redis.Client,
 ) *AgentHandler {
 	return &AgentHandler{
 		agentRepo:     agentRepo,
@@ -44,6 +50,7 @@ func NewAgentHandler(
 		taskQueue:     taskQueue,
 		maxRetries:    maxRetries,
 		bundlePath:    bundlePath,
+		redisClient:   redisClient,
 	}
 }
 
@@ -207,6 +214,167 @@ func (h *AgentHandler) CreateTask(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusCreated, task)
+}
+
+// ListAgents handles GET /api/v1/operator/agents.
+// Returns all registered agents, newest first. Requires operator JWT.
+func (h *AgentHandler) ListAgents(c *gin.Context) {
+	limit := 100
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	offset := 0
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	agents, err := h.agentRepo.List(c.Request.Context(), limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list agents"})
+		return
+	}
+	if agents == nil {
+		agents = []models.Agent{}
+	}
+	c.JSON(http.StatusOK, gin.H{"agents": agents, "count": len(agents)})
+}
+
+// ListTasks handles GET /api/v1/operator/tasks?agent_id=<uuid>&limit=50.
+// Returns task history for a specific agent. Requires operator JWT.
+func (h *AgentHandler) ListTasks(c *gin.Context) {
+	agentID, err := uuid.Parse(c.Query("agent_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or missing agent_id"})
+		return
+	}
+	limit := 50
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	tasks, err := h.taskRepo.ListByAgent(c.Request.Context(), agentID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list tasks"})
+		return
+	}
+	if tasks == nil {
+		tasks = []models.Task{}
+	}
+	c.JSON(http.StatusOK, gin.H{"tasks": tasks, "count": len(tasks)})
+}
+
+// ListTelemetry handles GET /api/v1/operator/telemetry?agent_id=<uuid>&limit=50.
+// Returns telemetry logs for a specific agent. Requires operator JWT.
+func (h *AgentHandler) ListTelemetry(c *gin.Context) {
+	agentID, err := uuid.Parse(c.Query("agent_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or missing agent_id"})
+		return
+	}
+	limit := 50
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	logs, err := h.telemetryRepo.ListByAgent(c.Request.Context(), agentID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list telemetry"})
+		return
+	}
+	if logs == nil {
+		logs = []models.Telemetry{}
+	}
+	c.JSON(http.StatusOK, gin.H{"telemetry": logs, "count": len(logs)})
+}
+
+// BundleUpload handles POST /api/v1/operator/bundle/upload.
+// Accepts a multipart file named "bundle" and overwrites the bundle at bundlePath.
+// Requires operator JWT.
+func (h *AgentHandler) BundleUpload(c *gin.Context) {
+	if h.bundlePath == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "bundle path not configured"})
+		return
+	}
+	fh, err := c.FormFile("bundle")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bundle field required"})
+		return
+	}
+	src, err := fh.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open upload"})
+		return
+	}
+	defer src.Close()
+
+	data, err := io.ReadAll(src)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read upload"})
+		return
+	}
+
+	// Ensure parent directory exists.
+	if err := os.MkdirAll(filepath.Dir(h.bundlePath), 0700); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "cannot create bundle directory"})
+		return
+	}
+	if err := os.WriteFile(h.bundlePath, data, 0600); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write bundle"})
+		return
+	}
+
+	log.Printf("[JOCKY] bundle updated by operator %s — %d bytes", c.ClientIP(), len(data))
+	_ = h.auditRepo.Write(c.Request.Context(), "bundle_upload", "bundle", nil, c.ClientIP(),
+		map[string]interface{}{"size": len(data)})
+	c.JSON(http.StatusOK, gin.H{"size": len(data), "path": h.bundlePath})
+}
+
+// Burn handles POST /api/v1/operator/burn.
+// Pushes self_destruct tasks to all online agents, flushes Redis payload data,
+// and deletes the bundle file. The operator kill switch.
+// Requires operator JWT.
+func (h *AgentHandler) Burn(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Push self_destruct to every online agent.
+	agents, _ := h.agentRepo.List(ctx, 1000, 0)
+	notified := 0
+	for _, a := range agents {
+		if a.Status == "online" {
+			task, err := h.taskRepo.Create(ctx, a.AgentID, "self_destruct", nil)
+			if err != nil {
+				continue
+			}
+			_ = h.taskQueue.Push(ctx, a.AgentID, queue.QueuedTask{
+				TaskID:      task.TaskID,
+				CommandType: "self_destruct",
+			})
+			notified++
+		}
+	}
+
+	// Flush Redis payload data: manifest + all chunk keys.
+	h.redisClient.Del(ctx, "payload:manifest")
+	iter := h.redisClient.Scan(ctx, 0, "payload:chunk:*", 0).Iterator()
+	for iter.Next(ctx) {
+		h.redisClient.Del(ctx, iter.Val())
+	}
+
+	// Delete bundle from disk.
+	if h.bundlePath != "" {
+		_ = os.Remove(h.bundlePath)
+	}
+
+	_ = h.auditRepo.Write(ctx, "operator_burn", "operator", nil, c.ClientIP(),
+		map[string]interface{}{"agents_notified": notified})
+	log.Printf("[JOCKY] BURN executed by %s — %d agent(s) notified", c.ClientIP(), notified)
+
+	c.JSON(http.StatusOK, gin.H{"burned": true, "agents_notified": notified})
 }
 
 // Telemetry handles POST /api/v1/agent/telemetry.

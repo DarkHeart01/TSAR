@@ -53,3 +53,13 @@ class ApiClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def download_artifact(self, build_id: str) -> bytes:
+        resp = requests.get(
+            f"{self.base_url}/api/build/{build_id}/artifact",
+            headers=self._headers(),
+            timeout=120,
+            stream=True,
+        )
+        resp.raise_for_status()
+        return resp.content
