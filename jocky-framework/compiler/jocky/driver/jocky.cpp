@@ -261,24 +261,31 @@ int main(int argc, char* argv[]) {
     // ── Stage 1B: Link ────────────────────────────────────────
     printf("[*] Stage 1B: Linking...\n");
 
+    const char* ws2_32_lib =
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\ws2_32.lib";
+    const char* advapi32_lib =
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\advapi32.lib";
+    const char* user32_lib =
+        "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\user32.lib";
+
     if (args.use_nostdlib) {
         snprintf(cmd, sizeof(cmd),
-            "clang -fuse-ld=lld -nostdlib "
+            "\"%s\" -nostdlib "
             "-Wl,-entry:%s -Wl,-subsystem:console "
             "-target x86_64-pc-windows-msvc "
             "-o \"%s\" \"%s\" \"%s\" \"%s\"",
+            polaris_clang,
             args.entry, raw_exe, obj_file,
             runtime_obj, kernel32_lib);
     } else {
-        const char* user32_lib =
-            "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\user32.lib";
-
         snprintf(cmd, sizeof(cmd),
-            "clang -fuse-ld=lld "
+            "\"%s\" "
             "-target x86_64-pc-windows-msvc "
-            "-o \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
+            "-o \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" \"%s\"",
+            polaris_clang,
             raw_exe, obj_file,
-            ucrt_lib, kernel32_lib, libcmt, libvcruntime, user32_lib);
+            ucrt_lib, kernel32_lib, libcmt, libvcruntime,
+            user32_lib, ws2_32_lib, advapi32_lib);
     }
 
 
