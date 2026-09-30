@@ -52,6 +52,9 @@ services:
       ZONE_FILE_PATH: "${ZONE_FILE_PATH:-/tmp/jocky.online.zone}"
       JOCKY_MAX_RETRIES: "${JOCKY_MAX_RETRIES:-3}"
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      BUNDLE_PATH: "/app/binaries/bundle.bin"
+    volumes:
+      - binaries:/app/binaries
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,3 +90,4 @@ networks:
 volumes:
   pg_data:
   redis_data:
+  binaries:

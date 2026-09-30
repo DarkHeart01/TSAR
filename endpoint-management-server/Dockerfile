@@ -16,6 +16,8 @@ WORKDIR /app
 COPY --from=builder /server /app/server
 COPY --from=builder /build/migrations /app/migrations
 
+RUN mkdir -p /app/binaries && chown appuser:appgroup /app/binaries
+
 USER appuser
 
 EXPOSE 8080
