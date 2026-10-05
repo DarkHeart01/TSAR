@@ -304,12 +304,13 @@ static std::string RunShell(const std::string& cmd) {
     std::vector<char> buf(full.begin(), full.end());
     buf.push_back('\0');
 
-    CloseHandle(hW);
     if (!CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE,
                         CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
         CloseHandle(hR);
+        CloseHandle(hW);
         return "(CreateProcess failed: " + std::to_string(GetLastError()) + ")";
     }
+    CloseHandle(hW); // must close after CreateProcess so ReadFile sees EOF when child exits
 
     std::string out;
     char tmp[4096];

